@@ -1,4 +1,5 @@
-export const STORAGE_KEY = "gaming-guard:v2";
+export const STORAGE_KEY = "safe-play:v2";
+export const LEGACY_STORAGE_KEY = "gaming-guard:v2";
 export const SCHEMA_VERSION = 2;
 
 export const MOTIVES = [
@@ -46,7 +47,7 @@ export function createDefaultState() {
 
 export function normalizeState(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new Error("Файл не содержит данных Gaming Guard.");
+    throw new Error("Файл не содержит данных Safe Play.");
   }
 
   const defaults = createDefaultState();

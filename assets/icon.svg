@@ -1,5 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Safe Play</title>
   <rect width="512" height="512" rx="112" fill="#11130f"/>
-  <path d="M256 59 407 116v116c0 104-65 177-151 221C170 409 105 336 105 232V116L256 59Z" fill="#c9f27b"/>
-  <path d="M164 260h184M210 214v92M310 226h2M344 278h2" fill="none" stroke="#11130f" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="256" cy="256" r="158" fill="#c9f27b"/>
+  <path d="M256 98a158 158 0 0 1 0 316" fill="#8bc9ff" opacity=".72"/>
+  <rect x="151" y="160" width="210" height="192" rx="62" fill="#11130f"/>
+  <path d="M225 218v76M287 218v76" fill="none" stroke="#c9f27b" stroke-width="25" stroke-linecap="round"/>
+  <path d="M256 123a133 133 0 1 0 119 192" fill="none" stroke="#f1f5e9" stroke-width="15" stroke-linecap="round" opacity=".8"/>
 </svg>

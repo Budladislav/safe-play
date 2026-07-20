@@ -1,4 +1,4 @@
-const CACHE = "gaming-guard-v2.0.0";
+const CACHE = "safe-play-v2.0.0";
 const ASSETS = [
   "./",
   "./index.html",

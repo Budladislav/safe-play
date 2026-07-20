@@ -32,5 +32,5 @@ createServer(async (request, response) => {
     response.end("Not found");
   }
 }).listen(port, "127.0.0.1", () => {
-  console.log(`Gaming Guard: http://127.0.0.1:${port}`);
+  console.log(`Safe Play: http://127.0.0.1:${port}`);
 });

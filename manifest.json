@@ -1,7 +1,7 @@
 {
-  "name": "Gaming Guard",
-  "short_name": "Guard",
-  "description": "Контролируемый гейминг: пауза, план и честные факты после сессии.",
+  "name": "Safe Play",
+  "short_name": "Safe Play",
+  "description": "Осознанный гейминг: пауза, план и честные факты после сессии.",
   "lang": "ru",
   "start_url": "./",
   "scope": "./",

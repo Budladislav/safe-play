@@ -2,6 +2,7 @@ import {
   STORAGE_KEY,
   MOTIVES,
   GAME_COLORS,
+  LEGACY_STORAGE_KEY,
   buildHeatmapDays,
   calculateSessionMetrics,
   clamp,
@@ -36,7 +37,11 @@ let gameSaveReturn = null;
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? normalizeState(JSON.parse(raw)) : createDefaultState();
+    const legacy = raw ? null : localStorage.getItem(LEGACY_STORAGE_KEY);
+    const restored = raw || legacy;
+    const normalized = restored ? normalizeState(JSON.parse(restored)) : createDefaultState();
+    if (legacy) localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+    return normalized;
   } catch (error) {
     console.error("Could not load state", error);
     return createDefaultState();
@@ -552,7 +557,7 @@ function renderSettings() {
         <div class="stack">
           <article class="card accent-card">
             <div class="card-header"><div><span class="eyebrow">О приложении</span><h2>Шлюз между импульсом и действием</h2></div></div>
-            <p class="muted-text">Gaming Guard не считает игры проблемой и не блокирует их силой. Он добавляет короткую паузу до старта, фиксирует выбранные границы и возвращает факты после.</p>
+            <p class="muted-text">Safe Play не считает игры проблемой и не блокирует их силой. Он добавляет короткую паузу до старта, фиксирует выбранные границы и возвращает факты после.</p>
             <div class="session-fact"><div class="fact-icon">✓</div><div><strong>Никакой геймификации контроля</strong><span>без серий, уровней, наград и достижений</span></div></div>
             <div class="session-fact"><div class="fact-icon">⌁</div><div><strong>Полностью офлайн</strong><span>нет аккаунта, сервера и облачной синхронизации</span></div></div>
             <div class="session-fact"><div class="fact-icon">◷</div><div><strong>Надёжный таймер</strong><span>основан на метке старта, а не на числе тиков</span></div></div>
@@ -1063,12 +1068,12 @@ function openSessionDetails(id) {
 }
 
 function exportData() {
-  const payload = { ...state, exportedAt: new Date().toISOString(), app: "Gaming Guard" };
+  const payload = { ...state, exportedAt: new Date().toISOString(), app: "Safe Play" };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `gaming-guard-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  anchor.download = `safe-play-backup-${new Date().toISOString().slice(0, 10)}.json`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
@@ -1230,7 +1235,7 @@ function showTimerNotification() {
     navigator.serviceWorker?.ready.then((registration) => registration.showNotification("Плановое время вышло", {
       body: "Завершите сессию или зафиксируйте продление.",
       icon: "assets/icon.svg",
-      tag: "gaming-guard-timer"
+      tag: "safe-play-timer"
     })).catch(() => {});
   }
 }
