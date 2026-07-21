@@ -1,6 +1,7 @@
 export const STORAGE_KEY = "safe-play:v2";
 export const LEGACY_STORAGE_KEY = "gaming-guard:v2";
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
+export const APP_VERSION = "2.1.0";
 
 export const MOTIVES = [
   { value: "planned", label: "Запланированный отдых" },
@@ -99,6 +100,7 @@ export function normalizeState(input) {
 function normalizeSession(session) {
   const plannedMinutes = Math.max(1, Number(session.plannedMinutes || session.basePlannedMinutes || 1));
   const actualMinutes = Math.max(0, Number(session.actualMinutes || 0));
+  const motives = normalizeMotives(session);
   return {
     ...session,
     id: String(session.id || createId("session")),
@@ -112,10 +114,11 @@ function normalizeSession(session) {
     onTime: typeof session.onTime === "boolean" ? session.onTime : actualMinutes <= plannedMinutes + 1,
     extensions: Array.isArray(session.extensions) ? session.extensions : [],
     checklistResults: session.checklistResults && typeof session.checklistResults === "object" ? session.checklistResults : {},
-    preState: clamp(Number(session.preState || 3), 1, 5),
-    satisfaction: clamp(Number(session.satisfaction || 3), 1, 5),
-    compulsivity: clamp(Number(session.compulsivity || 3), 1, 5),
-    motive: session.motive || "",
+    preState: clamp(Number(session.preState ?? 3), 1, 5),
+    satisfaction: clamp(Number(session.satisfaction ?? 3), 1, 5),
+    compulsivity: clamp(Number(session.compulsivity ?? 3), 1, 5),
+    motives,
+    motive: motives[0] || "",
     afterAction: String(session.afterAction || ""),
     afterActionConfirmed: Boolean(session.afterActionConfirmed),
     outcomeNote: String(session.outcomeNote || ""),
@@ -125,6 +128,7 @@ function normalizeSession(session) {
 
 function normalizeActiveSession(session) {
   const planned = Math.max(1, Number(session.plannedMinutes || session.basePlannedMinutes || 1));
+  const motives = normalizeMotives(session);
   return {
     ...session,
     id: String(session.id || createId("session")),
@@ -137,11 +141,22 @@ function normalizeActiveSession(session) {
       : new Date(new Date(session.startedAt).getTime() + planned * 60_000).toISOString(),
     extensions: Array.isArray(session.extensions) ? session.extensions : [],
     checklistResults: session.checklistResults && typeof session.checklistResults === "object" ? session.checklistResults : {},
-    preState: clamp(Number(session.preState || 3), 1, 5),
-    motive: session.motive || "",
+    preState: clamp(Number(session.preState ?? 3), 1, 5),
+    motives,
+    motive: motives[0] || "",
     afterAction: String(session.afterAction || ""),
     override: session.override || null
   };
+}
+
+function normalizeMotives(session) {
+  const raw = Array.isArray(session.motives)
+    ? session.motives
+    : session.motive
+      ? [session.motive]
+      : [];
+  const allowed = new Set(MOTIVES.map((item) => item.value));
+  return [...new Set(raw.map(String).filter((value) => allowed.has(value)))];
 }
 
 function isValidSession(session) {
@@ -257,10 +272,7 @@ export function summarizeStats(state, now = new Date()) {
   const lateHour = state.settings?.lateHour ?? 22;
   const lateSessions = sessions.filter((session) => new Date(session.startedAt).getHours() >= lateHour).length;
 
-  const weekStart = new Date(now);
-  weekStart.setHours(0, 0, 0, 0);
-  const day = weekStart.getDay() || 7;
-  weekStart.setDate(weekStart.getDate() - day + 1);
+  const weekStart = startOfWeek(now);
   const weekMinutes = sessions
     .filter((session) => new Date(session.startedAt) >= weekStart)
     .reduce((sum, session) => sum + Number(session.actualMinutes || 0), 0);
@@ -276,10 +288,10 @@ export function summarizeStats(state, now = new Date()) {
     const key = localDateKey(session.startedAt);
     byDay[key] = (byDay[key] || 0) + Number(session.actualMinutes || 0);
     byGame[session.gameId] = (byGame[session.gameId] || 0) + Number(session.actualMinutes || 0);
-    if (session.motive) motives[session.motive] = (motives[session.motive] || 0) + 1;
-    preState[clamp(Number(session.preState || 3), 1, 5) - 1] += 1;
-    satisfaction[clamp(Number(session.satisfaction || 3), 1, 5) - 1] += 1;
-    compulsivity[clamp(Number(session.compulsivity || 3), 1, 5) - 1] += 1;
+    normalizeMotives(session).forEach((motive) => { motives[motive] = (motives[motive] || 0) + 1; });
+    preState[clamp(Number(session.preState ?? 3), 1, 5) - 1] += 1;
+    satisfaction[clamp(Number(session.satisfaction ?? 3), 1, 5) - 1] += 1;
+    compulsivity[clamp(Number(session.compulsivity ?? 3), 1, 5) - 1] += 1;
   });
 
   return {
@@ -297,8 +309,46 @@ export function summarizeStats(state, now = new Date()) {
     motives,
     preState,
     satisfaction,
-    compulsivity
+    compulsivity,
+    weeks: buildWeeklyStats(sessions, 8, now)
   };
+}
+
+export function startOfWeek(value = new Date()) {
+  const start = new Date(value);
+  start.setHours(0, 0, 0, 0);
+  const day = start.getDay() || 7;
+  start.setDate(start.getDate() - day + 1);
+  return start;
+}
+
+export function buildWeeklyStats(sessions, weeks = 8, now = new Date()) {
+  const currentStart = startOfWeek(now);
+  const result = [];
+  for (let offset = weeks - 1; offset >= 0; offset -= 1) {
+    const start = new Date(currentStart);
+    start.setDate(start.getDate() - offset * 7);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 7);
+    const selected = sessions.filter((session) => {
+      const startedAt = new Date(session.startedAt);
+      return startedAt >= start && startedAt < end;
+    });
+    const minutes = selected.reduce((sum, session) => sum + Number(session.actualMinutes || 0), 0);
+    const plannedMinutes = selected.reduce((sum, session) => sum + Number(session.plannedMinutes || 0), 0);
+    const onTimeCount = selected.filter((session) => session.onTime).length;
+    result.push({
+      key: localDateKey(start),
+      start: start.toISOString(),
+      end: end.toISOString(),
+      minutes,
+      plannedMinutes,
+      sessions: selected.length,
+      onTimeCount,
+      onTimePercent: selected.length ? Math.round(onTimeCount / selected.length * 100) : 0
+    });
+  }
+  return result;
 }
 
 export function buildHeatmapDays(byDay, weeks = 16, now = new Date()) {

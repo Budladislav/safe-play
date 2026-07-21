@@ -891,11 +891,35 @@ input[type="range"] {
   font-weight: 800;
 }
 
-.scale-labels {
-  display: flex;
-  justify-content: space-between;
+.rating-control {
+  display: grid;
+  gap: 5px;
+}
+
+.rating-scale {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+  margin-right: 56px;
   color: var(--subtle);
   font-size: 10px;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.rating-scale span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.rating-scale span:first-child,
+.rating-scale span:last-child {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.weekly-bars .bar-label {
+  white-space: normal;
 }
 
 .checklist {

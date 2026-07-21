@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildHeatmapDays,
+  buildWeeklyStats,
   calculateSessionMetrics,
   createDefaultState,
   getTimerState,
@@ -49,7 +50,7 @@ test("import normalization preserves valid data and clamps settings", () => {
     events: [],
     settings: { extensionLimit: 99, lateHour: 4 }
   });
-  assert.equal(normalized.version, 2);
+  assert.equal(normalized.version, 3);
   assert.equal(normalized.games[0].title, "Test");
   assert.equal(normalized.settings.extensionLimit, 5);
   assert.equal(normalized.settings.lateHour, 18);
@@ -74,6 +75,7 @@ test("statistics aggregate plan, actual time, extensions and overrides", () => {
     preState: 2,
     satisfaction: 4,
     compulsivity: 5,
+    motives: ["story", "stress"],
     motive: "story"
   }];
   const stats = summarizeStats(state, new Date("2026-07-20T12:00:00.000Z"));
@@ -84,6 +86,31 @@ test("statistics aggregate plan, actual time, extensions and overrides", () => {
   assert.equal(stats.overrides, 1);
   assert.equal(stats.byGame.g1, 70);
   assert.equal(stats.compulsivity[4], 1);
+  assert.equal(stats.motives.story, 1);
+  assert.equal(stats.motives.stress, 1);
+});
+
+test("normalization migrates a legacy motive to the multi-select format", () => {
+  const normalized = normalizeState({
+    games: [{ id: "g1", title: "Game" }],
+    sessions: [{
+      id: "s1", gameId: "g1", startedAt: "2026-07-20T10:00:00.000Z", endedAt: "2026-07-20T11:00:00.000Z",
+      plannedMinutes: 60, actualMinutes: 60, preState: 1, satisfaction: 5, compulsivity: 1, motive: "story"
+    }]
+  });
+  assert.deepEqual(normalized.sessions[0].motives, ["story"]);
+  assert.equal(normalized.sessions[0].preState, 1);
+});
+
+test("weekly statistics keep sessions in their Monday-to-Sunday buckets", () => {
+  const weeks = buildWeeklyStats([
+    { startedAt: "2026-07-13T12:00:00.000Z", actualMinutes: 30, plannedMinutes: 30, onTime: true },
+    { startedAt: "2026-07-20T12:00:00.000Z", actualMinutes: 80, plannedMinutes: 60, onTime: false }
+  ], 2, new Date("2026-07-21T12:00:00"));
+  assert.equal(weeks[0].minutes, 30);
+  assert.equal(weeks[1].minutes, 80);
+  assert.equal(weeks[1].sessions, 1);
+  assert.equal(weeks[1].onTimePercent, 0);
 });
 
 test("heatmap always returns full weeks", () => {

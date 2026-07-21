@@ -1,5 +1,6 @@
 import {
   STORAGE_KEY,
+  APP_VERSION,
   MOTIVES,
   GAME_COLORS,
   LEGACY_STORAGE_KEY,
@@ -246,7 +247,7 @@ function renderActiveSession() {
             </div>
             <div class="session-fact">
               <div class="fact-icon">${session.preState}</div>
-              <div><strong>Состояние до игры</strong><span>${motiveLabel(session.motive)}</span></div>
+              <div><strong>Состояние до игры</strong><span>${motiveLabels(session)}</span></div>
             </div>
           </article>
 
@@ -407,6 +408,8 @@ function renderStats() {
   const maxGame = Math.max(1, ...Object.values(stats.byGame));
   const gameBars = Object.entries(stats.byGame).sort((a, b) => b[1] - a[1]);
   const maxDistribution = Math.max(1, ...stats.compulsivity);
+  const currentWeek = stats.weeks.at(-1);
+  const maxWeek = Math.max(1, ...stats.weeks.map((week) => week.minutes));
 
   return `
     <section class="view">
@@ -416,6 +419,10 @@ function renderStats() {
           <h1>Статистика контроля</h1>
           <p>Главный сигнал — разница между заранее выбранным планом и тем, что произошло.</p>
         </div>
+        <div class="button-row">
+          <button class="button" data-action="download-week-report">↓ Скачать неделю</button>
+          <button class="button primary" data-action="share-week-report">↗ Поделиться</button>
+        </div>
       </div>
 
       <div class="grid three" style="margin-bottom:18px">
@@ -423,6 +430,13 @@ function renderStats() {
         <article class="card"><div class="metric"><span class="metric-value">${formatDuration(stats.totalMinutes)}</span><span class="metric-label">общее игровое время</span><span class="metric-caption">план: ${formatDuration(stats.totalPlanned)}</span></div></article>
         <article class="card"><div class="metric"><span class="metric-value">${stats.extensions}</span><span class="metric-label">явных продлений</span><span class="metric-caption">обходов чек-листа: ${stats.overrides}</span></div></article>
       </div>
+
+      <article class="card" style="margin-bottom:18px">
+        <div class="card-header"><div><h2>Игровое время по неделям</h2><p>Последние 8 недель · текущая: ${formatDuration(currentWeek.minutes)}</p></div></div>
+        <div class="bar-list weekly-bars">
+          ${[...stats.weeks].reverse().map((week, index) => `<div class="bar-row"><span class="bar-label">${index === 0 ? "Текущая неделя" : formatWeekRange(week.start, week.end)}</span><span class="bar-track"><span class="bar-fill ${week.minutes > week.plannedMinutes ? "danger" : ""}" style="display:block;width:${week.minutes / maxWeek * 100}%"></span></span><span class="bar-value">${formatDuration(week.minutes)} · ${week.sessions} ${plural(week.sessions, ["сессия", "сессии", "сессий"])}</span></div>`).join("")}
+        </div>
+      </article>
 
       <div class="grid two" style="margin-bottom:18px">
         <article class="card">
@@ -475,10 +489,10 @@ function renderStats() {
 
       <div class="grid two">
         <article class="card">
-          <div class="card-header"><div><h2>Почему хотелось играть</h2><p>Необязательный тег на входе</p></div></div>
+          <div class="card-header"><div><h2>Почему хотелось играть</h2><p>Можно выбрать несколько причин на входе</p></div></div>
           ${Object.keys(stats.motives).length ? `<div class="bar-list">${Object.entries(stats.motives).sort((a,b) => b[1]-a[1]).map(([key, count]) => `
             <div class="bar-row"><span class="bar-label">${escapeHTML(motiveLabel(key))}</span><span class="bar-track"><span class="bar-fill blue" style="display:block;width:${count / Math.max(...Object.values(stats.motives)) * 100}%"></span></span><span class="bar-value">${count}</span></div>
-          `).join("")}</div>` : `<p class="muted-text">Теги пока не использовались.</p>`}
+          `).join("")}</div>` : `<p class="muted-text">Причины пока не указывались.</p>`}
         </article>
         <article class="card">
           <div class="card-header"><div><h2>Дополнительные сигналы</h2><p>Для наблюдения, не для наказания</p></div></div>
@@ -556,7 +570,7 @@ function renderSettings() {
 
         <div class="stack">
           <article class="card accent-card">
-            <div class="card-header"><div><span class="eyebrow">О приложении</span><h2>Шлюз между импульсом и действием</h2></div></div>
+            <div class="card-header"><div><span class="eyebrow">О приложении · v${APP_VERSION}</span><h2>Шлюз между импульсом и действием</h2></div><a class="button small" href="./CHANGELOG.md" target="_blank" rel="noopener">Ченджлог</a></div>
             <p class="muted-text">Safe Play не считает игры проблемой и не блокирует их силой. Он добавляет короткую паузу до старта, фиксирует выбранные границы и возвращает факты после.</p>
             <div class="session-fact"><div class="fact-icon">✓</div><div><strong>Никакой геймификации контроля</strong><span>без серий, уровней, наград и достижений</span></div></div>
             <div class="session-fact"><div class="fact-icon">⌁</div><div><strong>Полностью офлайн</strong><span>нет аккаунта, сервера и облачной синхронизации</span></div></div>
@@ -619,12 +633,12 @@ function openEntryModal(preselectedGameId = "") {
           </section>
 
           <section class="modal-section">
-            <div class="section-heading"><div><h3>2. Как вы сейчас?</h3><p>1 — очень плохо, 5 — отлично.</p></div></div>
-            <div class="range-field"><input type="range" name="preState" min="1" max="5" value="3" data-range-output="preStateValue"><output class="range-value" id="preStateValue">3</output></div>
+            <div class="section-heading"><div><h3>2. Как вы сейчас?</h3><p>1 — совсем нет ресурса, 5 — отлично.</p></div></div>
+            <div class="rating-control"><div class="range-field"><input type="range" name="preState" min="1" max="5" value="3" data-range-output="preStateValue"><output class="range-value" id="preStateValue">3</output></div>${renderRatingScale(["Очень плохо", "Плохо", "Нормально", "Хорошо", "Отлично"])}</div>
             <div class="field">
-              <span class="field-label">Почему хочется играть? <span class="subtle-text">необязательно</span></span>
+              <span class="field-label">Почему хочется играть? <span class="subtle-text">можно выбрать несколько</span></span>
               <div class="chip-group">
-                ${MOTIVES.map((item) => `<label class="choice-chip"><input type="radio" name="motive" value="${item.value}"><span>${escapeHTML(item.label)}</span></label>`).join("")}
+                ${MOTIVES.map((item) => `<label class="choice-chip"><input type="checkbox" name="motives" value="${item.value}"><span>${escapeHTML(item.label)}</span></label>`).join("")}
               </div>
             </div>
           </section>
@@ -680,7 +694,7 @@ function collectEntryPayload(form) {
     plannedMinutes: Number(data.get("plannedMinutes")),
     afterAction: String(data.get("afterAction") || "").trim(),
     preState: Number(data.get("preState")),
-    motive: String(data.get("motive") || ""),
+    motives: data.getAll("motives").map(String),
     checklistResults: checks,
     missingRequired
   };
@@ -698,7 +712,8 @@ function beginSession(payload, override = null) {
     plannedMinutes: payload.plannedMinutes,
     afterAction: payload.afterAction,
     preState: payload.preState,
-    motive: payload.motive,
+    motives: payload.motives,
+    motive: payload.motives[0] || "",
     checklistResults: payload.checklistResults,
     extensions: [],
     override
@@ -784,8 +799,8 @@ function openFinishModal() {
       <form id="finishForm">
         <div class="modal-body">
           <div class="form-grid">
-            <div class="field full"><label>Удовлетворение от игры</label><div class="range-field"><input type="range" name="satisfaction" min="1" max="5" value="3" data-range-output="satisfactionValue"><output class="range-value" id="satisfactionValue">3</output></div><div class="scale-labels"><span>не удовлетворён</span><span>полностью удовлетворён</span></div></div>
-            <div class="field full"><label>Желание продолжить</label><div class="range-field"><input type="range" name="compulsivity" min="1" max="5" value="3" data-range-output="compulsivityValue"><output class="range-value" id="compulsivityValue">3</output></div><div class="scale-labels"><span>спокойно остановился</span><span>очень тянет продолжить</span></div></div>
+            <div class="field full"><label>Удовлетворение от игры</label><div class="rating-control"><div class="range-field"><input type="range" name="satisfaction" min="1" max="5" value="3" data-range-output="satisfactionValue"><output class="range-value" id="satisfactionValue">3</output></div>${renderRatingScale(["Совсем нет", "Скорее нет", "Средне", "Скорее да", "Полностью"])}</div></div>
+            <div class="field full"><label>Желание продолжить</label><div class="rating-control"><div class="range-field"><input type="range" name="compulsivity" min="1" max="5" value="3" data-range-output="compulsivityValue"><output class="range-value" id="compulsivityValue">3</output></div>${renderRatingScale(["Не тянет", "Слабо", "Средне", "Сильно", "Очень сильно"])}</div></div>
             <div class="field full"><label for="outcomeNote">Чем закончилась сессия?</label><textarea class="textarea" id="outcomeNote" name="outcomeNote" maxlength="240" placeholder="Например: прошёл главу, сохранился у босса"></textarea></div>
             <div class="field full"><label class="check-row"><input type="checkbox" name="afterActionConfirmed"><span><strong>Следующее действие: ${escapeHTML(session.afterAction || "не указано")}</strong><small>Я подтверждаю, что сейчас возвращаюсь к нему</small></span><span class="status-pill info">мост</span></label></div>
           </div>
@@ -1053,7 +1068,7 @@ function openSessionDetails(id) {
       <div class="modal-body">
         <div class="mini-metrics"><div class="mini-metric"><strong>${session.plannedMinutes} мин</strong><span>план</span></div><div class="mini-metric"><strong class="${session.onTime ? "text-success" : "text-danger"}">${session.actualMinutes} мин</strong><span>факт</span></div></div>
         <div class="form-grid">
-          <div class="session-fact"><div class="fact-icon">${session.preState}</div><div><strong>Состояние до</strong><span>${motiveLabel(session.motive)}</span></div></div>
+          <div class="session-fact"><div class="fact-icon">${session.preState}</div><div><strong>Состояние до</strong><span>${motiveLabels(session)}</span></div></div>
           <div class="session-fact"><div class="fact-icon">${session.satisfaction}</div><div><strong>Удовлетворение</strong><span>из 5</span></div></div>
           <div class="session-fact"><div class="fact-icon">${session.compulsivity}</div><div><strong>Желание продолжить</strong><span>из 5</span></div></div>
           <div class="session-fact"><div class="fact-icon">${session.extensions.length}</div><div><strong>Продления</strong><span>${session.extensions.map((e) => `+${e.minutes} мин`).join(", ") || "не было"}</span></div></div>
@@ -1062,13 +1077,209 @@ function openSessionDetails(id) {
         <div class="session-fact"><div class="fact-icon">≡</div><div><strong>${escapeHTML(session.outcomeNote || "Без заметки")}</strong><span>чем закончилась сессия</span></div></div>
         ${session.override ? `<div class="notice warning"><span>!</span><div><strong>Был использован override</strong><br>${escapeHTML(session.override.reason)}</div></div>` : ""}
       </div>
-      <div class="modal-footer"><button class="button primary" data-close-modal>Закрыть</button></div>
+      <div class="modal-footer"><button class="button danger" data-action="delete-session" data-id="${escapeAttr(session.id)}">${icon("trash")} Удалить</button><div class="button-row"><button class="button" data-action="edit-session" data-id="${escapeAttr(session.id)}">${icon("edit")} Редактировать</button><button class="button primary" data-close-modal>Закрыть</button></div></div>
     </div>
   `);
 }
 
+function openEditSessionModal(id) {
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) return;
+  const selectedMotives = new Set(session.motives?.length ? session.motives : session.motive ? [session.motive] : []);
+  openModal(`
+    <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="editSessionTitle">
+      <div class="modal-header"><div><span class="eyebrow">Коррекция фактов</span><h2 id="editSessionTitle">Редактировать сессию</h2><p>После сохранения план, факт и статистика будут пересчитаны.</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
+      <form id="editSessionForm" data-session-id="${escapeAttr(session.id)}">
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="field"><label for="editSessionGame">Игра</label><select class="select" id="editSessionGame" name="gameId" required>${state.games.map((game) => `<option value="${escapeAttr(game.id)}" ${game.id === session.gameId ? "selected" : ""}>${escapeHTML(game.title)}</option>`).join("")}</select></div>
+            <div class="field"><label for="editPlannedMinutes">План, минут</label><input class="input" id="editPlannedMinutes" name="plannedMinutes" type="number" min="1" max="1440" value="${session.plannedMinutes}" required></div>
+            <div class="field"><label for="editStartedAt">Начало</label><input class="input" id="editStartedAt" name="startedAt" type="datetime-local" value="${toDateTimeLocal(session.startedAt)}" required></div>
+            <div class="field"><label for="editEndedAt">Окончание</label><input class="input" id="editEndedAt" name="endedAt" type="datetime-local" value="${toDateTimeLocal(session.endedAt)}" required></div>
+            <div class="field full"><label>Состояние до</label><div class="rating-control"><div class="range-field"><input type="range" name="preState" min="1" max="5" value="${session.preState}" data-range-output="editPreStateValue"><output class="range-value" id="editPreStateValue">${session.preState}</output></div>${renderRatingScale(["Очень плохо", "Плохо", "Нормально", "Хорошо", "Отлично"])}</div></div>
+            <div class="field full"><span class="field-label">Почему хотелось играть?</span><div class="chip-group">${MOTIVES.map((item) => `<label class="choice-chip"><input type="checkbox" name="motives" value="${item.value}" ${selectedMotives.has(item.value) ? "checked" : ""}><span>${escapeHTML(item.label)}</span></label>`).join("")}</div></div>
+            <div class="field full"><label for="editAfterAction">Что планировалось после?</label><input class="input" id="editAfterAction" name="afterAction" maxlength="120" value="${escapeAttr(session.afterAction)}"></div>
+            <div class="field full"><label>Удовлетворение от игры</label><div class="rating-control"><div class="range-field"><input type="range" name="satisfaction" min="1" max="5" value="${session.satisfaction}" data-range-output="editSatisfactionValue"><output class="range-value" id="editSatisfactionValue">${session.satisfaction}</output></div>${renderRatingScale(["Совсем нет", "Скорее нет", "Средне", "Скорее да", "Полностью"])}</div></div>
+            <div class="field full"><label>Желание продолжить</label><div class="rating-control"><div class="range-field"><input type="range" name="compulsivity" min="1" max="5" value="${session.compulsivity}" data-range-output="editCompulsivityValue"><output class="range-value" id="editCompulsivityValue">${session.compulsivity}</output></div>${renderRatingScale(["Не тянет", "Слабо", "Средне", "Сильно", "Очень сильно"])}</div></div>
+            <div class="field full"><label for="editOutcomeNote">Чем закончилась сессия?</label><textarea class="textarea" id="editOutcomeNote" name="outcomeNote" maxlength="240">${escapeHTML(session.outcomeNote)}</textarea></div>
+            <div class="field full"><label class="check-row"><input type="checkbox" name="afterActionConfirmed" ${session.afterActionConfirmed ? "checked" : ""}><span><strong>Следующее действие подтверждено</strong><small>Факт, отмеченный при завершении</small></span><span class="status-pill info">мост</span></label></div>
+          </div>
+        </div>
+        <div class="modal-footer"><button class="button ghost" type="button" data-close-modal>Отмена</button><button class="button primary" type="submit">Сохранить изменения</button></div>
+      </form>
+    </div>
+  `);
+}
+
+function updateSession(form) {
+  const id = form.dataset.sessionId;
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) return;
+  const data = new FormData(form);
+  const startedAt = new Date(String(data.get("startedAt")));
+  const endedAt = new Date(String(data.get("endedAt")));
+  const plannedMinutes = Number(data.get("plannedMinutes"));
+  if (!Number.isFinite(startedAt.getTime()) || !Number.isFinite(endedAt.getTime()) || !Number.isFinite(plannedMinutes) || plannedMinutes < 1 || plannedMinutes > 1440 || endedAt <= startedAt) {
+    toast("Проверьте время", "Окончание должно быть позже начала.");
+    return;
+  }
+  const motives = data.getAll("motives").map(String);
+  const metrics = calculateSessionMetrics(startedAt.toISOString(), endedAt.toISOString(), plannedMinutes);
+  const updated = {
+    ...session,
+    gameId: String(data.get("gameId")),
+    startedAt: startedAt.toISOString(),
+    endedAt: endedAt.toISOString(),
+    plannedMinutes,
+    basePlannedMinutes: Math.max(1, plannedMinutes - session.extensions.reduce((sum, extension) => sum + Number(extension.minutes || 0), 0)),
+    ...metrics,
+    preState: Number(data.get("preState")),
+    satisfaction: Number(data.get("satisfaction")),
+    compulsivity: Number(data.get("compulsivity")),
+    motives,
+    motive: motives[0] || "",
+    afterAction: String(data.get("afterAction") || "").trim(),
+    outcomeNote: String(data.get("outcomeNote") || "").trim(),
+    afterActionConfirmed: data.has("afterActionConfirmed"),
+    editedAt: new Date().toISOString()
+  };
+  state.sessions = state.sessions.map((item) => item.id === id ? updated : item);
+  state.events.push({ id: createId("event"), type: "session-edited", at: updated.editedAt, sessionId: id });
+  saveState();
+  closeModal();
+  render();
+  toast("Сессия обновлена", "План, факт и статистика пересчитаны.");
+}
+
+function confirmDeleteSession(id) {
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) return;
+  openConfirm({
+    title: "Удалить сессию?",
+    body: `${gameById(session.gameId)?.title || "Игра"} · ${formatDateTime(session.startedAt)}. Это действие нельзя отменить без JSON-копии.`,
+    confirmLabel: "Удалить сессию",
+    danger: true,
+    onConfirm: () => {
+      state.sessions = state.sessions.filter((item) => item.id !== id);
+      state.events = state.events.filter((event) => event.sessionId !== id && event.sourceSessionId !== id);
+      if (state.cooldown?.sourceSessionId === id) state.cooldown = null;
+      saveState();
+      closeModal();
+      render();
+      toast("Сессия удалена", "Она больше не учитывается в истории и статистике.");
+    }
+  });
+}
+
+function buildCurrentWeekReport() {
+  const stats = summarizeStats(state);
+  const week = stats.weeks.at(-1);
+  const start = new Date(week.start);
+  const end = new Date(week.end);
+  const sessions = state.sessions.filter((session) => {
+    const date = new Date(session.startedAt);
+    return date >= start && date < end;
+  });
+  const byGame = {};
+  sessions.forEach((session) => { byGame[session.gameId] = (byGame[session.gameId] || 0) + Number(session.actualMinutes || 0); });
+  const games = Object.entries(byGame).sort((a, b) => b[1] - a[1]).map(([gameId, minutes]) => ({ title: gameById(gameId)?.title || "Удалённая игра", minutes }));
+  const range = formatWeekRange(week.start, week.end);
+  const text = [`Safe Play · ${range}`, `Игровое время: ${formatDuration(week.minutes)}`, `Сессий: ${week.sessions}`, `Вовремя: ${week.onTimePercent}%`, ...games.map((game) => `${game.title}: ${formatDuration(game.minutes)}`)].join("\n");
+  return { ...week, games, range, text, filename: `safe-play-week-${week.key}.png` };
+}
+
+async function createWeeklyReportBlob(report) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1080;
+  canvas.height = 1080;
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#11130f";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "#c9f27b";
+  context.font = "700 42px system-ui, sans-serif";
+  context.fillText("SAFE PLAY", 76, 100);
+  context.fillStyle = "#f3f5ee";
+  context.font = "700 72px system-ui, sans-serif";
+  context.fillText("Статистика за неделю", 76, 210);
+  context.fillStyle = "#9da793";
+  context.font = "400 34px system-ui, sans-serif";
+  context.fillText(report.range, 76, 270);
+  const metrics = [["Игровое время", formatDuration(report.minutes)], ["Сессий", String(report.sessions)], ["Завершены вовремя", `${report.onTimePercent}%`]];
+  metrics.forEach(([label, value], index) => {
+    const y = 380 + index * 130;
+    context.fillStyle = "#8a9381";
+    context.font = "500 29px system-ui, sans-serif";
+    context.fillText(label, 76, y);
+    context.fillStyle = index === 0 ? "#c9f27b" : "#f3f5ee";
+    context.font = "700 52px system-ui, sans-serif";
+    context.fillText(value, 76, y + 58);
+  });
+  context.fillStyle = "#8a9381";
+  context.font = "500 28px system-ui, sans-serif";
+  context.fillText("По играм", 570, 380);
+  report.games.slice(0, 5).forEach((game, index) => {
+    const y = 445 + index * 82;
+    context.fillStyle = "#f3f5ee";
+    context.font = "600 30px system-ui, sans-serif";
+    const title = game.title.length > 22 ? `${game.title.slice(0, 21)}…` : game.title;
+    context.fillText(title, 570, y);
+    context.fillStyle = "#c9f27b";
+    context.font = "700 30px system-ui, sans-serif";
+    context.fillText(formatDuration(game.minutes), 570, y + 38);
+  });
+  if (!report.games.length) {
+    context.fillStyle = "#8a9381";
+    context.font = "400 30px system-ui, sans-serif";
+    context.fillText("На этой неделе сессий не было", 570, 450);
+  }
+  context.fillStyle = "#697061";
+  context.font = "400 25px system-ui, sans-serif";
+  context.fillText(`Safe Play v${APP_VERSION} · контроль без геймификации`, 76, 1000);
+  return new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Не удалось создать изображение")), "image/png"));
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function downloadWeekReport() {
+  try {
+    const report = buildCurrentWeekReport();
+    downloadBlob(await createWeeklyReportBlob(report), report.filename);
+    toast("Отчёт готов", "PNG со статистикой за неделю сохранён в загрузки.");
+  } catch (error) {
+    toast("Не удалось создать отчёт", error.message);
+  }
+}
+
+async function shareWeekReport() {
+  try {
+    const report = buildCurrentWeekReport();
+    const blob = await createWeeklyReportBlob(report);
+    const file = new File([blob], report.filename, { type: "image/png" });
+    if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+      await navigator.share({ title: "Safe Play — статистика за неделю", text: report.text, files: [file] });
+      return;
+    }
+    if (navigator.share) {
+      await navigator.share({ title: "Safe Play — статистика за неделю", text: report.text });
+      return;
+    }
+    downloadBlob(blob, report.filename);
+    toast("Отчёт скачан", "На этом устройстве нет системного меню «Поделиться». Отправьте PNG из загрузок.");
+  } catch (error) {
+    if (error.name !== "AbortError") toast("Не удалось поделиться", error.message);
+  }
+}
 function exportData() {
-  const payload = { ...state, exportedAt: new Date().toISOString(), app: "Safe Play" };
+  const payload = { ...state, exportedAt: new Date().toISOString(), app: "Safe Play", appVersion: APP_VERSION };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -1189,6 +1400,27 @@ function plural(number, words) {
   return words[2];
 }
 
+function renderRatingScale(labels) {
+  return `<div class="rating-scale">${labels.map((label) => `<span title="${escapeAttr(label)}">${escapeHTML(label)}</span>`).join("")}</div>`;
+}
+
+function motiveLabels(session) {
+  const motives = session.motives?.length ? session.motives : session.motive ? [session.motive] : [];
+  return escapeHTML(motives.length ? motives.map(motiveLabel).join(", ") : "Причины не указаны");
+}
+
+function toDateTimeLocal(value) {
+  const date = new Date(value);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function formatWeekRange(startValue, endValue) {
+  const start = new Date(startValue);
+  const end = new Date(new Date(endValue).getTime() - 1);
+  const format = (date) => new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short" }).format(date);
+  return `${format(start)} — ${format(end)}`;
+}
 function toast(title, message) {
   const element = document.createElement("div");
   element.className = "toast";
@@ -1265,6 +1497,10 @@ document.addEventListener("click", (event) => {
     "open-finish": openFinishModal,
     "open-extension": openExtensionModal,
     "session-details": () => openSessionDetails(id),
+    "edit-session": () => openEditSessionModal(id),
+    "delete-session": () => confirmDeleteSession(id),
+    "download-week-report": downloadWeekReport,
+    "share-week-report": shareWeekReport,
     "add-check": () => openCheckModal(),
     "edit-check": () => openCheckModal(state.checklist.find((item) => item.id === id)),
     "delete-check": () => deleteCheck(id),
@@ -1291,6 +1527,7 @@ document.addEventListener("submit", (event) => {
   if (form.id === "gameForm") saveGame(form);
   if (form.id === "checkForm") saveCheck(form);
   if (form.id === "releaseCooldownForm") releaseCooldown(form);
+  if (form.id === "editSessionForm") updateSession(form);
 });
 
 document.addEventListener("input", (event) => {
