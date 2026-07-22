@@ -6,7 +6,7 @@ import {
   GAME_COLORS,
   SESSION_WARNING_LEADS,
   LEGACY_STORAGE_KEY,
-  buildHeatmapDays,
+  buildHeatmapMonths,
   calculateSessionMetrics,
   clamp,
   createDefaultState,
@@ -41,6 +41,8 @@ let wakeLock = null;
 let lastTimerWasOvertime = null;
 let gameSaveReturn = null;
 let warningAudioContext = null;
+let showAllWeeks = false;
+let showAllHeatmapMonths = false;
 
 function loadState() {
   try {
@@ -411,7 +413,12 @@ function renderHistory() {
 
 function renderStats() {
   const stats = summarizeStats(state);
-  const days = buildHeatmapDays(stats.byDay, 18);
+  const recentHeatmapMonths = buildHeatmapMonths(stats.byDay, 3);
+  const historyHeatmapMonths = buildHeatmapMonths(stats.byDay, 3, new Date(), true);
+  const recentMonthKeys = new Set(recentHeatmapMonths.map((month) => month.key));
+  const canExpandHeatmap = historyHeatmapMonths.some((month) => !recentMonthKeys.has(month.key));
+  const isHeatmapExpanded = showAllHeatmapMonths && canExpandHeatmap;
+  const heatmapMonths = isHeatmapExpanded ? historyHeatmapMonths : recentHeatmapMonths;
   const recent = stats.sessions.slice(-12);
   const maxPlanActual = Math.max(1, ...recent.flatMap((s) => [s.plannedMinutes, s.actualMinutes]));
   const maxGame = Math.max(1, ...Object.values(stats.byGame));
@@ -419,6 +426,8 @@ function renderStats() {
   const maxDistribution = Math.max(1, ...stats.compulsivity);
   const currentWeek = stats.weeks.at(-1);
   const maxWeek = Math.max(1, ...stats.weeks.map((week) => week.minutes));
+  const isWeekHistoryExpanded = showAllWeeks && stats.weeks.length > 4;
+  const visibleWeeks = isWeekHistoryExpanded ? stats.weeks : stats.weeks.slice(-4);
 
   return `
     <section class="view">
@@ -442,21 +451,31 @@ function renderStats() {
       </div>
 
       <article class="card" style="margin-bottom:18px">
-        <div class="card-header"><div><h2>Игровое время по неделям</h2><p>Последние 8 недель · текущая: ${formatDuration(currentWeek.minutes)}</p></div></div>
+        <div class="card-header">
+          <div><h2>Игровое время по неделям</h2><p>${isWeekHistoryExpanded ? `Вся история · ${stats.weeks.length} ${plural(stats.weeks.length, ["неделя", "недели", "недель"])}` : "Последние 4 недели"} · текущая: ${formatDuration(currentWeek.minutes)}</p></div>
+          ${stats.weeks.length > 4 ? `<button class="button small" data-action="toggle-week-history">${isWeekHistoryExpanded ? "Показать 4 недели" : "Показать всю историю"}</button>` : ""}
+        </div>
         <div class="bar-list weekly-bars">
-          ${[...stats.weeks].reverse().map((week, index) => `<div class="bar-row"><span class="bar-label">${index === 0 ? "Текущая неделя" : formatWeekRange(week.start, week.end)}</span><span class="bar-track"><span class="bar-fill ${week.minutes > week.plannedMinutes ? "danger" : ""}" style="display:block;width:${week.minutes / maxWeek * 100}%"></span></span><span class="bar-value">${formatDuration(week.minutes)} · ${week.sessions} ${plural(week.sessions, ["сессия", "сессии", "сессий"])}</span></div>`).join("")}
+          ${[...visibleWeeks].reverse().map((week) => `<div class="bar-row"><span class="bar-label">${week.key === currentWeek.key ? "Текущая неделя" : formatWeekRange(week.start, week.end)}</span><span class="bar-track"><span class="bar-fill ${week.minutes > week.plannedMinutes ? "danger" : ""}" style="display:block;width:${week.minutes / maxWeek * 100}%"></span></span><span class="bar-value">${formatDuration(week.minutes)} · ${week.sessions} ${plural(week.sessions, ["сессия", "сессии", "сессий"])}</span></div>`).join("")}
         </div>
       </article>
 
       <div class="grid two" style="margin-bottom:18px">
         <article class="card">
-          <div class="card-header"><div><h2>Игровое время по дням</h2><p>Последние 18 недель</p></div></div>
+          <div class="card-header">
+            <div><h2>${isHeatmapExpanded ? "Все месяцы с сессиями" : "Последние 3 месяца"}</h2><p>Игровое время по дням</p></div>
+            ${canExpandHeatmap ? `<button class="button small" data-action="toggle-heatmap-history">${isHeatmapExpanded ? "Показать 3 месяца" : "Показать всю историю"}</button>` : ""}
+          </div>
           <div class="heatmap-wrap">
-            <div class="heatmap">
-              ${days.map((day) => `<span class="heat-cell" data-level="${day.level}" title="${formatDateTime(day.date, { year: "numeric" })}: ${formatDuration(day.minutes)}"></span>`).join("")}
+            <div class="heatmap-months">
+              ${heatmapMonths.map((month) => `<section class="heatmap-month">
+                <h3>${formatMonthLabel(month.start)}</h3>
+                <div class="heatmap-weekdays"><span>пн</span><span>вт</span><span>ср</span><span>чт</span><span>пт</span><span>сб</span><span>вс</span></div>
+                <div class="heatmap-month-grid">${month.days.map((day) => day ? `<span class="heat-cell" data-level="${day.level}" title="${formatReportDate(day.date)}: ${formatDuration(day.minutes)}"></span>` : `<span class="heat-cell empty" aria-hidden="true"></span>`).join("")}</div>
+              </section>`).join("")}
             </div>
           </div>
-          <div class="heatmap-legend"><span>Пустой день — тоже нормальный день.</span><span class="legend-scale">меньше <i class="heat-cell"></i><i class="heat-cell" data-level="1"></i><i class="heat-cell" data-level="2"></i><i class="heat-cell" data-level="3"></i><i class="heat-cell" data-level="4"></i> больше</span></div>
+          <div class="heatmap-legend"><span class="legend-scale">меньше <i class="heat-cell"></i><i class="heat-cell" data-level="1"></i><i class="heat-cell" data-level="2"></i><i class="heat-cell" data-level="3"></i><i class="heat-cell" data-level="4"></i> больше</span></div>
         </article>
 
         <article class="card">
@@ -1683,6 +1702,11 @@ function plural(number, words) {
   return words[2];
 }
 
+function formatMonthLabel(value) {
+  const label = new Intl.DateTimeFormat("ru-RU", { month: "long", year: "numeric" }).format(new Date(value));
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
 function renderRatingScale(labels) {
   return `<div class="rating-scale">${labels.map((label) => `<span title="${escapeAttr(label)}">${escapeHTML(label)}</span>`).join("")}</div>`;
 }
@@ -1843,6 +1867,8 @@ document.addEventListener("click", (event) => {
     "download-week-report": downloadWeekReport,
     "share-week-report": shareWeekReport,
     "open-text-report": openTextReportModal,
+    "toggle-week-history": () => { showAllWeeks = !showAllWeeks; render(); },
+    "toggle-heatmap-history": () => { showAllHeatmapMonths = !showAllHeatmapMonths; render(); },
     "add-check": () => openCheckModal(),
     "edit-check": () => openCheckModal(state.checklist.find((item) => item.id === id)),
     "delete-check": () => deleteCheck(id),

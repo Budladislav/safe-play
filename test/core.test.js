@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildHeatmapDays,
+  buildHeatmapMonths,
   buildWeeklyStats,
   calculateSessionMetrics,
   createDefaultState,
+  getAvailableWeekCount,
   getAccumulatedPausedMs,
   getSessionsInRange,
   getTimerState,
@@ -173,4 +175,21 @@ test("heatmap always returns full weeks", () => {
   const days = buildHeatmapDays({ "2026-07-20": 90 }, 4, new Date("2026-07-20T12:00:00"));
   assert.equal(days.length, 28);
   assert.equal(days.find((day) => day.key === "2026-07-20").level, 2);
+});
+
+test("available week count covers the full history with a four-week minimum", () => {
+  assert.equal(getAvailableWeekCount([], new Date("2026-07-22T12:00:00")), 4);
+  assert.equal(getAvailableWeekCount([
+    { startedAt: "2026-05-18T12:00:00" },
+    { startedAt: "2026-07-22T12:00:00" }
+  ], new Date("2026-07-22T12:00:00")), 10);
+});
+
+test("monthly heatmap separates calendar months and can select active history", () => {
+  const byDay = { "2026-04-03": 30, "2026-06-10": 90, "2026-07-20": 250 };
+  const recent = buildHeatmapMonths(byDay, 3, new Date("2026-07-22T12:00:00"));
+  assert.deepEqual(recent.map((month) => month.key), ["2026-05", "2026-06", "2026-07"]);
+  assert.equal(recent[2].days.find((day) => day?.key === "2026-07-20").level, 4);
+  const active = buildHeatmapMonths(byDay, 3, new Date("2026-07-22T12:00:00"), true);
+  assert.deepEqual(active.map((month) => month.key), ["2026-04", "2026-06", "2026-07"]);
 });

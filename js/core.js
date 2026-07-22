@@ -350,7 +350,7 @@ export function summarizeStats(state, now = new Date()) {
     preState,
     satisfaction,
     compulsivity,
-    weeks: buildWeeklyStats(sessions, 8, now)
+    weeks: buildWeeklyStats(sessions, getAvailableWeekCount(sessions, now), now)
   };
 }
 
@@ -391,6 +391,14 @@ export function buildWeeklyStats(sessions, weeks = 8, now = new Date()) {
   return result;
 }
 
+export function getAvailableWeekCount(sessions, now = new Date()) {
+  if (!sessions.length) return 4;
+  const currentStart = startOfWeek(now);
+  const earliestStart = startOfWeek(sessions.reduce((earliest, session) => new Date(session.startedAt) < earliest ? new Date(session.startedAt) : earliest, new Date(sessions[0].startedAt)));
+  const distance = Math.round((currentStart - earliestStart) / (7 * 86_400_000));
+  return Math.max(4, distance + 1);
+}
+
 export function getSessionsInRange(sessions, startValue, endValue) {
   const start = new Date(startValue).getTime();
   const end = new Date(endValue).getTime();
@@ -416,6 +424,39 @@ export function buildHeatmapDays(byDay, weeks = 16, now = new Date()) {
     days.push({ date, minutes, level, key: localDateKey(date) });
   }
   return days;
+}
+
+export function buildHeatmapMonths(byDay, months = 3, now = new Date(), activeOnly = false) {
+  let keys;
+  if (activeOnly) {
+    keys = [...new Set(Object.entries(byDay)
+      .filter(([, minutes]) => Number(minutes) > 0)
+      .map(([key]) => key.slice(0, 7)))]
+      .sort();
+  } else {
+    const current = new Date(now.getFullYear(), now.getMonth(), 1);
+    keys = [];
+    for (let offset = Math.max(1, months) - 1; offset >= 0; offset -= 1) {
+      const month = new Date(current.getFullYear(), current.getMonth() - offset, 1);
+      keys.push(localDateKey(month).slice(0, 7));
+    }
+  }
+
+  return keys.map((key) => {
+    const [year, month] = key.split("-").map(Number);
+    const start = new Date(year, month - 1, 1);
+    const lastDay = new Date(year, month, 0).getDate();
+    const leadingBlanks = (start.getDay() + 6) % 7;
+    const days = Array.from({ length: leadingBlanks }, () => null);
+    for (let day = 1; day <= lastDay; day += 1) {
+      const date = new Date(year, month - 1, day);
+      const dateKey = localDateKey(date);
+      const minutes = Number(byDay[dateKey] || 0);
+      const level = minutes === 0 ? 0 : minutes <= 60 ? 1 : minutes <= 120 ? 2 : minutes <= 240 ? 3 : 4;
+      days.push({ date, key: dateKey, minutes, level });
+    }
+    return { key, start, days };
+  });
 }
 
 export function motiveLabel(value) {

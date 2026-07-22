@@ -1390,13 +1390,49 @@ input[type="range"] {
   padding-bottom: 5px;
 }
 
-.heatmap {
-  display: grid;
-  grid-auto-flow: column;
-  grid-template-rows: repeat(7, 13px);
-  grid-auto-columns: 13px;
-  gap: 4px;
+.heatmap-months {
+  display: flex;
+  gap: 28px;
+  align-items: flex-start;
+  justify-content: center;
   width: max-content;
+  min-width: 100%;
+}
+
+.heatmap-month {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  min-width: 132px;
+}
+
+.heatmap-month h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.heatmap-weekdays,
+.heatmap-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 13px);
+  gap: 4px;
+}
+
+.heatmap-weekdays {
+  color: var(--subtle);
+  font-size: 8px;
+  line-height: 1;
+  text-align: center;
+}
+
+.heatmap-month-grid {
+  align-content: start;
+}
+
+.heat-cell.empty {
+  visibility: hidden;
 }
 
 .heat-cell {
@@ -1414,11 +1450,12 @@ input[type="range"] {
 .heatmap-legend {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 16px;
   margin-top: 13px;
   color: var(--subtle);
   font-size: 10px;
+  text-align: center;
 }
 
 .legend-scale {
