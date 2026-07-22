@@ -4,6 +4,7 @@ import {
   APP_RELEASE_DATE,
   MOTIVES,
   GAME_COLORS,
+  SESSION_WARNING_LEADS,
   LEGACY_STORAGE_KEY,
   buildHeatmapDays,
   calculateSessionMetrics,
@@ -20,6 +21,7 @@ import {
   isCooldownActive,
   motiveLabel,
   normalizeState,
+  shouldTriggerSessionWarning,
   summarizeStats
 } from "./core.js";
 
@@ -36,6 +38,7 @@ let deferredInstallPrompt = null;
 let wakeLock = null;
 let lastTimerWasOvertime = null;
 let gameSaveReturn = null;
+let warningAudioContext = null;
 
 function loadState() {
   try {
@@ -291,9 +294,12 @@ function tickTimer() {
   value.textContent = formatTimer(timer.remainingMs);
   if (progress) progress.style.width = `${timer.progress}%`;
 
+  if (shouldTriggerSessionWarning(state.activeSession, state.settings)) {
+    triggerSessionWarning();
+  }
+
   if (lastTimerWasOvertime === false && timer.isOvertime) {
     lastTimerWasOvertime = true;
-    navigator.vibrate?.([180, 100, 180]);
     showTimerNotification();
     render();
   }
@@ -559,6 +565,22 @@ function renderSettings() {
                   ${[20,21,22,23,24].map((value) => `<option value="${value}" ${state.settings.lateHour === value ? "selected" : ""}>${value === 24 ? "00:00" : `${value}:00`}</option>`).join("")}
                 </select>
               </div>
+              <div class="field full session-warning-settings">
+                <span class="field-label">Предупреждение перед концом</span>
+                <div class="settings-item" style="grid-template-columns:minmax(0,1fr) auto">
+                  <div class="setting-copy"><strong>Звук</strong><span>Короткий сигнал, если PWA и браузер разрешат воспроизведение.</span></div>
+                  <label class="switch"><input type="checkbox" data-setting="warning-sound" ${state.settings.warningSound ? "checked" : ""}><span class="switch-slider"></span></label>
+                </div>
+                <div class="settings-item" style="grid-template-columns:minmax(0,1fr) auto">
+                  <div class="setting-copy"><strong>Вибрация</strong><span>Best effort на поддерживаемых Android-устройствах.</span></div>
+                  <label class="switch"><input type="checkbox" data-setting="warning-vibration" ${state.settings.warningVibration ? "checked" : ""}><span class="switch-slider"></span></label>
+                </div>
+                <label for="warningLeadMinutes">Когда предупредить</label>
+                <select class="select" id="warningLeadMinutes" data-setting="warning-lead">
+                  ${SESSION_WARNING_LEADS.map((value) => `<option value="${value}" ${state.settings.warningLeadMinutes === value ? "selected" : ""}>За ${value} ${value === 1 ? "минуту" : "минут"}</option>`).join("")}
+                </select>
+                <small>${state.settings.warningSound || state.settings.warningVibration ? "Активные способы можно сочетать." : "Сейчас выключено: включите звук, вибрацию или оба способа."}</small>
+              </div>
               <div class="field full">
                 <div class="settings-item" style="grid-template-columns:minmax(0,1fr) auto">
                   <div class="setting-copy"><strong>Не выключать экран</strong><span>Best effort: Wake Lock работает не на всех устройствах и только пока PWA открыто.</span></div>
@@ -719,11 +741,13 @@ function beginSession(payload, override = null) {
     pauses: [],
     totalPausedMs: 0,
     pausedAt: null,
+    warningForEndAt: null,
     override
   };
   if (override) {
     state.events.push({ id: createId("event"), type: "override", at: startedAt.toISOString(), sessionId: state.activeSession.id, ...override });
   }
+  if (state.settings.warningSound) void prepareWarningAudio();
   saveState();
   closeModal();
   navigate("home");
@@ -799,7 +823,9 @@ function toggleSessionPause() {
     const durationMs = Math.max(0, now.getTime() - new Date(session.pausedAt).getTime());
     const pause = { startedAt: session.pausedAt, endedAt: now.toISOString(), durationMs };
     session.totalPausedMs = Math.max(0, Number(session.totalPausedMs || 0)) + durationMs;
+    const previousEndAt = session.plannedEndAt;
     session.plannedEndAt = new Date(new Date(session.plannedEndAt).getTime() + durationMs).toISOString();
+    if (session.warningForEndAt === previousEndAt) session.warningForEndAt = session.plannedEndAt;
     session.pauses = [...(session.pauses || []), pause];
     session.pausedAt = null;
     state.events.push({ id: createId("event"), type: "session-resumed", at: pause.endedAt, sessionId: session.id, durationMs });
@@ -1504,6 +1530,58 @@ async function releaseWakeLock() {
   wakeLock = null;
 }
 
+async function prepareWarningAudio() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return null;
+  warningAudioContext ||= new AudioContextClass();
+  if (warningAudioContext.state === "suspended") await warningAudioContext.resume();
+  return warningAudioContext;
+}
+
+async function playWarningSound() {
+  try {
+    const context = await prepareWarningAudio();
+    if (!context) return;
+    const start = context.currentTime;
+    [0, 0.28, 0.56].forEach((delay, index) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(index === 2 ? 920 : 760, start + delay);
+      gain.gain.setValueAtTime(0.0001, start + delay);
+      gain.gain.exponentialRampToValueAtTime(0.18, start + delay + 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + delay + 0.2);
+      oscillator.connect(gain).connect(context.destination);
+      oscillator.start(start + delay);
+      oscillator.stop(start + delay + 0.22);
+    });
+  } catch (error) {
+    console.info("Warning sound unavailable", error);
+  }
+}
+
+function triggerSessionWarning() {
+  const session = state.activeSession;
+  if (!session) return;
+  const sound = Boolean(state.settings.warningSound);
+  const vibration = Boolean(state.settings.warningVibration);
+  session.warningForEndAt = session.plannedEndAt;
+  if (sound) void playWarningSound();
+  if (vibration) navigator.vibrate?.([180, 100, 180]);
+  state.events.push({
+    id: createId("event"),
+    type: "session-warning",
+    at: new Date().toISOString(),
+    sessionId: session.id,
+    plannedEndAt: session.plannedEndAt,
+    leadMinutes: state.settings.warningLeadMinutes,
+    sound,
+    vibration
+  });
+  saveState();
+  toast("Сессия скоро закончится", `До точки решения — ${state.settings.warningLeadMinutes} мин.`);
+}
+
 function showTimerNotification() {
   if ("Notification" in window && Notification.permission === "granted") {
     navigator.serviceWorker?.ready.then((registration) => registration.showNotification("Плановое время вышло", {
@@ -1587,6 +1665,12 @@ document.addEventListener("change", (event) => {
   if (target.dataset.setting === "extension-limit") state.settings.extensionLimit = Number(target.value);
   if (target.dataset.setting === "late-hour") state.settings.lateHour = Number(target.value);
   if (target.dataset.setting === "keep-awake") state.settings.keepAwake = target.checked;
+  if (target.dataset.setting === "warning-sound") {
+    state.settings.warningSound = target.checked;
+    if (target.checked) void prepareWarningAudio();
+  }
+  if (target.dataset.setting === "warning-vibration") state.settings.warningVibration = target.checked;
+  if (target.dataset.setting === "warning-lead") state.settings.warningLeadMinutes = Number(target.value);
   if (target.dataset.setting === "check-enabled") {
     state.checklist = state.checklist.map((item) => item.id === target.dataset.id ? { ...item, enabled: target.checked } : item);
   }

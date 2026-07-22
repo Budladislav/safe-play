@@ -2002,6 +2002,18 @@ input[type="range"] {
 }
 
 
+.session-warning-settings {
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.session-warning-settings .settings-item {
+  padding: 12px 0;
+}
+
 .timer-stage.paused {
   border-color: rgba(139, 201, 255, 0.28);
   background:

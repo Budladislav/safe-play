@@ -14,6 +14,7 @@ export const MOTIVES = [
 ];
 
 export const GAME_COLORS = ["#c9f27b", "#8bc9ff", "#ffad7d", "#c9a8ff", "#7de2d1", "#f4d06f"];
+export const SESSION_WARNING_LEADS = [1, 3, 5, 10, 15];
 
 export function createId(prefix = "id") {
   const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -38,6 +39,9 @@ export function createDefaultState() {
     settings: {
       extensionLimit: 1,
       keepAwake: false,
+      warningSound: false,
+      warningVibration: false,
+      warningLeadMinutes: 5,
       lateHour: 22
     },
     meta: {
@@ -86,6 +90,9 @@ export function normalizeState(input) {
       ...(input.settings || {}),
       extensionLimit: clamp(Number(input.settings?.extensionLimit ?? defaults.settings.extensionLimit), 0, 5),
       keepAwake: Boolean(input.settings?.keepAwake),
+      warningSound: Boolean(input.settings?.warningSound),
+      warningVibration: Boolean(input.settings?.warningVibration),
+      warningLeadMinutes: normalizeWarningLead(input.settings?.warningLeadMinutes, defaults.settings.warningLeadMinutes),
       lateHour: clamp(Number(input.settings?.lateHour ?? defaults.settings.lateHour), 18, 24)
     },
     meta: {
@@ -146,6 +153,7 @@ function normalizeActiveSession(session) {
     pauses: Array.isArray(session.pauses) ? session.pauses : [],
     totalPausedMs: Math.max(0, Number(session.totalPausedMs || 0)),
     pausedAt: validIso(session.pausedAt) ? session.pausedAt : null,
+    warningForEndAt: validIso(session.warningForEndAt) ? session.warningForEndAt : null,
     checklistResults: session.checklistResults && typeof session.checklistResults === "object" ? session.checklistResults : {},
     preState: clamp(Number(session.preState ?? 3), 1, 5),
     motives,
@@ -153,6 +161,11 @@ function normalizeActiveSession(session) {
     afterAction: String(session.afterAction || ""),
     override: session.override || null
   };
+}
+
+function normalizeWarningLead(value, fallback) {
+  const minutes = Number(value);
+  return SESSION_WARNING_LEADS.includes(minutes) ? minutes : fallback;
 }
 
 function normalizeMotives(session) {
@@ -205,6 +218,16 @@ export function getAccumulatedPausedMs(session, at = Date.now()) {
   const stored = Math.max(0, Number(session.totalPausedMs || 0));
   if (!validIso(session.pausedAt)) return stored;
   return stored + Math.max(0, Number(at) - new Date(session.pausedAt).getTime());
+}
+
+export function shouldTriggerSessionWarning(activeSession, settings, now = Date.now()) {
+  if (!activeSession || activeSession.pausedAt) return false;
+  if (!settings?.warningSound && !settings?.warningVibration) return false;
+  if (!validIso(activeSession.plannedEndAt)) return false;
+  if (activeSession.warningForEndAt === activeSession.plannedEndAt) return false;
+  const remainingMs = new Date(activeSession.plannedEndAt).getTime() - Number(now);
+  const leadMinutes = normalizeWarningLead(settings.warningLeadMinutes, 5);
+  return remainingMs > 0 && remainingMs <= leadMinutes * 60_000;
 }
 
 export function getTimerState(activeSession, now = Date.now()) {

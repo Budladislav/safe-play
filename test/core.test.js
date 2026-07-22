@@ -8,6 +8,7 @@ import {
   getAccumulatedPausedMs,
   getTimerState,
   normalizeState,
+  shouldTriggerSessionWarning,
   summarizeStats
 } from "../js/core.js";
 
@@ -47,6 +48,21 @@ test("paused timer stays fixed and reconstructs accumulated pause time", () => {
   assert.equal(getAccumulatedPausedMs(session, new Date("2026-07-20T10:50:00.000Z").getTime()), 35 * 60_000);
 });
 
+test("near-end warning respects channels, lead time, pause and delivery marker", () => {
+  const active = {
+    plannedEndAt: "2026-07-20T11:00:00.000Z",
+    pausedAt: null,
+    warningForEndAt: null
+  };
+  const enabled = { warningSound: true, warningVibration: false, warningLeadMinutes: 5 };
+  assert.equal(shouldTriggerSessionWarning(active, enabled, new Date("2026-07-20T10:54:59.000Z").getTime()), false);
+  assert.equal(shouldTriggerSessionWarning(active, enabled, new Date("2026-07-20T10:55:00.000Z").getTime()), true);
+  assert.equal(shouldTriggerSessionWarning({ ...active, pausedAt: "2026-07-20T10:55:00.000Z" }, enabled, new Date("2026-07-20T10:56:00.000Z").getTime()), false);
+  assert.equal(shouldTriggerSessionWarning({ ...active, warningForEndAt: active.plannedEndAt }, enabled, new Date("2026-07-20T10:56:00.000Z").getTime()), false);
+  assert.equal(shouldTriggerSessionWarning(active, { ...enabled, warningSound: false }, new Date("2026-07-20T10:56:00.000Z").getTime()), false);
+  assert.equal(shouldTriggerSessionWarning(active, enabled, new Date("2026-07-20T11:00:01.000Z").getTime()), false);
+});
+
 test("session metrics separate actual duration and overrun", () => {
   const metrics = calculateSessionMetrics(
     "2026-07-20T10:00:00.000Z",
@@ -76,6 +92,9 @@ test("import normalization preserves valid data and clamps settings", () => {
   assert.equal(normalized.games[0].title, "Test");
   assert.equal(normalized.settings.extensionLimit, 5);
   assert.equal(normalized.settings.lateHour, 18);
+  assert.equal(normalized.settings.warningSound, false);
+  assert.equal(normalized.settings.warningVibration, false);
+  assert.equal(normalized.settings.warningLeadMinutes, 5);
   assert.ok(normalized.checklist.length >= 4);
 });
 
