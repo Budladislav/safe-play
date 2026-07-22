@@ -1718,6 +1718,19 @@ input[type="range"] {
   height: 42px;
 }
 
+.data-action > .fact-icon {
+  display: grid;
+  margin-top: 0;
+  color: var(--accent);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.data-action > span:last-child {
+  min-width: 0;
+  margin-top: 0;
+}
+
 .data-action strong,
 .data-action span {
   display: block;
@@ -2048,7 +2061,7 @@ input[type="range"] {
 }
 
 .session-warning-settings .settings-item {
-  padding: 12px 0;
+  padding: 14px 16px;
 }
 
 .timer-stage.paused {
