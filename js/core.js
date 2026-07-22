@@ -1,7 +1,7 @@
 export const STORAGE_KEY = "safe-play:v2";
 export const LEGACY_STORAGE_KEY = "gaming-guard:v2";
 export const SCHEMA_VERSION = 4;
-export const APP_VERSION = "2.2.0";
+export const APP_VERSION = "2.2.1";
 export const APP_RELEASE_DATE = "2026-07-22";
 
 export const MOTIVES = [
