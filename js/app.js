@@ -14,6 +14,7 @@ import {
   formatDateTime,
   formatDuration,
   formatTimer,
+  getAccumulatedPausedMs,
   getGameTotals,
   getTimerState,
   isCooldownActive,
@@ -198,7 +199,7 @@ function renderActiveSession() {
     <section class="view">
       <div class="view-header">
         <div>
-          <span class="eyebrow">Сессия идёт</span>
+          <span class="eyebrow">${timer.isPaused ? "Сессия на паузе" : "Сессия идёт"}</span>
           <h1>${escapeHTML(game?.title || "Игра")}</h1>
         </div>
         <div class="header-actions">
@@ -207,24 +208,25 @@ function renderActiveSession() {
       </div>
 
       <div class="timer-layout">
-        <article class="card timer-stage ${timer.isOvertime ? "overtime" : ""}" id="timerStage">
+        <article class="card timer-stage ${timer.isPaused ? "paused" : timer.isOvertime ? "overtime" : ""}" id="timerStage">
           <div class="timer-topline">
-            <span class="status-pill ${timer.isOvertime ? "required" : "info"}" id="timerStatus">${timer.isOvertime ? "План завершён" : "В границах плана"}</span>
+            <span class="status-pill ${timer.isOvertime ? "required" : "info"}" id="timerStatus">${timer.isPaused ? "На паузе" : timer.isOvertime ? "План завершён" : "В границах плана"}</span>
             <span class="subtle-text">старт ${formatClock(session.startedAt)}</span>
           </div>
 
           <div class="timer-center">
-            <div class="timer-label" id="timerLabel">${timer.isOvertime ? "Перерасход" : "До решения"}</div>
+            <div class="timer-label" id="timerLabel">${timer.isPaused ? "Пауза" : timer.isOvertime ? "Перерасход" : "До решения"}</div>
             <div class="timer-value" id="timerValue">${formatTimer(timer.remainingMs)}</div>
             <div class="timer-subtext" id="timerSubtext">
-              ${timer.isOvertime ? "Пора принять новое явное решение" : `Плановое окончание в ${formatClock(session.plannedEndAt)}`}
+              ${timer.isPaused ? "Игровое время и граница сессии остановлены" : timer.isOvertime ? "Пора принять новое явное решение" : `Плановое окончание в ${formatClock(session.plannedEndAt)}`}
             </div>
           </div>
 
           <div>
             <div class="progress-track"><div class="progress-bar" id="timerProgress" style="width:${timer.progress}%"></div></div>
             <div class="button-row" style="justify-content:center;margin-top:24px">
-              <button class="button primary" data-action="open-finish">Закончить сейчас</button>
+              <button class="button ${timer.isPaused ? "primary" : ""}" data-action="toggle-session-pause">${timer.isPaused ? "Продолжить" : "Пауза"}</button>
+              <button class="button ${timer.isPaused ? "" : "primary"}" data-action="open-finish">Закончить сейчас</button>
               <button class="button" data-action="open-extension" ${extensionsLeft <= 0 ? "disabled" : ""}>
                 Продлить ${extensionsLeft > 0 ? `· осталось ${extensionsLeft}` : "· лимит исчерпан"}
               </button>
@@ -714,6 +716,9 @@ function beginSession(payload, override = null) {
     motive: payload.motives[0] || "",
     checklistResults: payload.checklistResults,
     extensions: [],
+    pauses: [],
+    totalPausedMs: 0,
+    pausedAt: null,
     override
   };
   if (override) {
@@ -786,11 +791,36 @@ function setupHoldButton(button, onComplete) {
   button.addEventListener("keyup", reset);
 }
 
+function toggleSessionPause() {
+  const session = state.activeSession;
+  if (!session) return;
+  const now = new Date();
+  if (session.pausedAt) {
+    const durationMs = Math.max(0, now.getTime() - new Date(session.pausedAt).getTime());
+    const pause = { startedAt: session.pausedAt, endedAt: now.toISOString(), durationMs };
+    session.totalPausedMs = Math.max(0, Number(session.totalPausedMs || 0)) + durationMs;
+    session.plannedEndAt = new Date(new Date(session.plannedEndAt).getTime() + durationMs).toISOString();
+    session.pauses = [...(session.pauses || []), pause];
+    session.pausedAt = null;
+    state.events.push({ id: createId("event"), type: "session-resumed", at: pause.endedAt, sessionId: session.id, durationMs });
+    saveState();
+    render();
+    toast("Сессия продолжена", `Новая точка окончания — ${formatClock(session.plannedEndAt)}.`);
+    return;
+  }
+  session.pausedAt = now.toISOString();
+  state.events.push({ id: createId("event"), type: "session-paused", at: session.pausedAt, sessionId: session.id });
+  saveState();
+  releaseWakeLock();
+  render();
+  toast("Таймер на паузе", "Игровое время сейчас не учитывается.");
+}
+
 function openFinishModal() {
   const session = state.activeSession;
   if (!session) return;
   const now = new Date();
-  const metrics = calculateSessionMetrics(session.startedAt, now.toISOString(), session.plannedMinutes);
+  const metrics = calculateSessionMetrics(session.startedAt, now.toISOString(), session.plannedMinutes, getAccumulatedPausedMs(session, now.getTime()));
   openModal(`
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="finishTitle">
       <div class="modal-header"><div><span class="eyebrow">Короткий выход</span><h2 id="finishTitle">Зафиксировать итог</h2><p>${formatDuration(metrics.actualMinutes)} в игре · ${metrics.onTime ? "в рамках плана" : `перерасход ${formatDuration(metrics.overtimeMinutes)}`}</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
@@ -815,10 +845,18 @@ function finishSession(form) {
   if (!active) return;
   const data = new FormData(form);
   const endedAt = new Date().toISOString();
-  const metrics = calculateSessionMetrics(active.startedAt, endedAt, active.plannedMinutes);
+  const endedAtMs = new Date(endedAt).getTime();
+  const totalPausedMs = getAccumulatedPausedMs(active, endedAtMs);
+  const pauses = active.pausedAt
+    ? [...(active.pauses || []), { startedAt: active.pausedAt, endedAt, durationMs: Math.max(0, endedAtMs - new Date(active.pausedAt).getTime()) }]
+    : [...(active.pauses || [])];
+  const metrics = calculateSessionMetrics(active.startedAt, endedAt, active.plannedMinutes, totalPausedMs);
   const session = {
     ...active,
     endedAt,
+    pausedAt: null,
+    totalPausedMs,
+    pauses,
     ...metrics,
     satisfaction: Number(data.get("satisfaction")),
     compulsivity: Number(data.get("compulsivity")),
@@ -1070,6 +1108,7 @@ function openSessionDetails(id) {
           <div class="session-fact"><div class="fact-icon">${session.satisfaction}</div><div><strong>Удовлетворение</strong><span>из 5</span></div></div>
           <div class="session-fact"><div class="fact-icon">${session.compulsivity}</div><div><strong>Желание продолжить</strong><span>из 5</span></div></div>
           <div class="session-fact"><div class="fact-icon">${session.extensions.length}</div><div><strong>Продления</strong><span>${session.extensions.map((e) => `+${e.minutes} мин`).join(", ") || "не было"}</span></div></div>
+          ${session.totalPausedMs ? `<div class="session-fact"><div class="fact-icon">Ⅱ</div><div><strong>Паузы</strong><span>${formatDuration(session.totalPausedMs / 60_000)}</span></div></div>` : ""}
         </div>
         <div class="session-fact"><div class="fact-icon">→</div><div><strong>${escapeHTML(session.afterAction || "Не указано")}</strong><span>${session.afterActionConfirmed ? "следующее действие подтверждено" : "не подтверждено"}</span></div></div>
         <div class="session-fact"><div class="fact-icon">≡</div><div><strong>${escapeHTML(session.outcomeNote || "Без заметки")}</strong><span>чем закончилась сессия</span></div></div>
@@ -1122,7 +1161,7 @@ function updateSession(form) {
     return;
   }
   const motives = data.getAll("motives").map(String);
-  const metrics = calculateSessionMetrics(startedAt.toISOString(), endedAt.toISOString(), plannedMinutes);
+  const metrics = calculateSessionMetrics(startedAt.toISOString(), endedAt.toISOString(), plannedMinutes, session.totalPausedMs || 0);
   const updated = {
     ...session,
     gameId: String(data.get("gameId")),
@@ -1452,7 +1491,7 @@ function icon(name) {
 }
 
 async function requestWakeLock() {
-  if (!state.settings.keepAwake || !state.activeSession || !navigator.wakeLock || document.visibilityState !== "visible") return;
+  if (!state.settings.keepAwake || !state.activeSession || state.activeSession.pausedAt || !navigator.wakeLock || document.visibilityState !== "visible") return;
   try {
     wakeLock = await navigator.wakeLock.request("screen");
   } catch (error) {
@@ -1499,6 +1538,7 @@ document.addEventListener("click", (event) => {
     "delete-game": () => confirmDeleteGame(id),
     "open-finish": openFinishModal,
     "open-extension": openExtensionModal,
+    "toggle-session-pause": toggleSessionPause,
     "session-details": () => openSessionDetails(id),
     "edit-session": () => openEditSessionModal(id),
     "delete-session": () => confirmDeleteSession(id),

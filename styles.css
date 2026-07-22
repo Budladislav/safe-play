@@ -2000,3 +2000,21 @@ input[type="range"] {
     right: 18px;
   }
 }
+
+
+.timer-stage.paused {
+  border-color: rgba(139, 201, 255, 0.28);
+  background:
+    radial-gradient(circle at 50% 42%, rgba(139, 201, 255, 0.1), transparent 18rem),
+    linear-gradient(145deg, rgba(31, 42, 46, 0.96), rgba(22, 28, 28, 0.96));
+}
+
+.timer-stage.paused .timer-value,
+.timer-stage.paused .timer-label {
+  color: var(--blue);
+}
+
+.timer-stage.paused .progress-bar {
+  background: var(--blue);
+  transition: none;
+}

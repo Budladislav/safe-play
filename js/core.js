@@ -114,6 +114,8 @@ function normalizeSession(session) {
     overtimeMinutes: Math.max(0, Number(session.overtimeMinutes ?? Math.ceil(actualMinutes - plannedMinutes))),
     onTime: typeof session.onTime === "boolean" ? session.onTime : actualMinutes <= plannedMinutes + 1,
     extensions: Array.isArray(session.extensions) ? session.extensions : [],
+    pauses: Array.isArray(session.pauses) ? session.pauses : [],
+    totalPausedMs: Math.max(0, Number(session.totalPausedMs || 0)),
     checklistResults: session.checklistResults && typeof session.checklistResults === "object" ? session.checklistResults : {},
     preState: clamp(Number(session.preState ?? 3), 1, 5),
     satisfaction: clamp(Number(session.satisfaction ?? 3), 1, 5),
@@ -141,6 +143,9 @@ function normalizeActiveSession(session) {
       ? session.plannedEndAt
       : new Date(new Date(session.startedAt).getTime() + planned * 60_000).toISOString(),
     extensions: Array.isArray(session.extensions) ? session.extensions : [],
+    pauses: Array.isArray(session.pauses) ? session.pauses : [],
+    totalPausedMs: Math.max(0, Number(session.totalPausedMs || 0)),
+    pausedAt: validIso(session.pausedAt) ? session.pausedAt : null,
     checklistResults: session.checklistResults && typeof session.checklistResults === "object" ? session.checklistResults : {},
     preState: clamp(Number(session.preState ?? 3), 1, 5),
     motives,
@@ -182,10 +187,11 @@ export function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
-export function calculateSessionMetrics(startedAt, endedAt, plannedMinutes) {
+export function calculateSessionMetrics(startedAt, endedAt, plannedMinutes, pausedMs = 0) {
   const start = new Date(startedAt).getTime();
   const end = new Date(endedAt).getTime();
-  const actualMinutesExact = Math.max(0, (end - start) / 60_000);
+  const activeDurationMs = Math.max(0, end - start - Math.max(0, Number(pausedMs) || 0));
+  const actualMinutesExact = activeDurationMs / 60_000;
   const actualMinutes = Math.max(1, Math.ceil(actualMinutesExact));
   const overtimeMinutes = Math.max(0, Math.ceil(actualMinutesExact - plannedMinutes));
   return {
@@ -195,15 +201,25 @@ export function calculateSessionMetrics(startedAt, endedAt, plannedMinutes) {
   };
 }
 
+export function getAccumulatedPausedMs(session, at = Date.now()) {
+  const stored = Math.max(0, Number(session.totalPausedMs || 0));
+  if (!validIso(session.pausedAt)) return stored;
+  return stored + Math.max(0, Number(at) - new Date(session.pausedAt).getTime());
+}
+
 export function getTimerState(activeSession, now = Date.now()) {
   const start = new Date(activeSession.startedAt).getTime();
   const plannedEnd = new Date(activeSession.plannedEndAt).getTime();
-  const elapsedMs = Math.max(0, now - start);
-  const remainingMs = plannedEnd - now;
-  const plannedMs = Math.max(1, plannedEnd - start);
+  const isPaused = validIso(activeSession.pausedAt);
+  const effectiveNow = isPaused ? new Date(activeSession.pausedAt).getTime() : now;
+  const storedPausedMs = Math.max(0, Number(activeSession.totalPausedMs || 0));
+  const elapsedMs = Math.max(0, effectiveNow - start - storedPausedMs);
+  const plannedMs = Math.max(1, plannedEnd - start - storedPausedMs);
+  const remainingMs = plannedMs - elapsedMs;
   return {
     elapsedMs,
     remainingMs,
+    isPaused,
     isOvertime: remainingMs <= 0,
     progress: clamp((elapsedMs / plannedMs) * 100, 0, 100)
   };

@@ -5,6 +5,7 @@ import {
   buildWeeklyStats,
   calculateSessionMetrics,
   createDefaultState,
+  getAccumulatedPausedMs,
   getTimerState,
   normalizeState,
   summarizeStats
@@ -32,6 +33,20 @@ test("timestamp timer reports overtime instead of stopping", () => {
   assert.equal(timer.progress, 100);
 });
 
+test("paused timer stays fixed and reconstructs accumulated pause time", () => {
+  const session = {
+    startedAt: "2026-07-20T10:00:00.000Z",
+    plannedEndAt: "2026-07-20T11:05:00.000Z",
+    pausedAt: "2026-07-20T10:20:00.000Z",
+    totalPausedMs: 5 * 60_000
+  };
+  const timer = getTimerState(session, new Date("2026-07-20T10:50:00.000Z").getTime());
+  assert.equal(timer.isPaused, true);
+  assert.equal(timer.elapsedMs, 15 * 60_000);
+  assert.equal(timer.remainingMs, 45 * 60_000);
+  assert.equal(getAccumulatedPausedMs(session, new Date("2026-07-20T10:50:00.000Z").getTime()), 35 * 60_000);
+});
+
 test("session metrics separate actual duration and overrun", () => {
   const metrics = calculateSessionMetrics(
     "2026-07-20T10:00:00.000Z",
@@ -39,6 +54,13 @@ test("session metrics separate actual duration and overrun", () => {
     60
   );
   assert.deepEqual(metrics, { actualMinutes: 73, overtimeMinutes: 13, onTime: false });
+  const pausedMetrics = calculateSessionMetrics(
+    "2026-07-20T10:00:00.000Z",
+    "2026-07-20T11:12:20.000Z",
+    60,
+    20 * 60_000
+  );
+  assert.deepEqual(pausedMetrics, { actualMinutes: 53, overtimeMinutes: 0, onTime: true });
 });
 
 test("import normalization preserves valid data and clamps settings", () => {
