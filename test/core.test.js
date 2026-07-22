@@ -91,7 +91,7 @@ test("import normalization preserves valid data and clamps settings", () => {
     events: [],
     settings: { extensionLimit: 99, lateHour: 4 }
   });
-  assert.equal(normalized.version, 3);
+  assert.equal(normalized.version, 4);
   assert.equal(normalized.games[0].title, "Test");
   assert.equal(normalized.settings.extensionLimit, 5);
   assert.equal(normalized.settings.lateHour, 18);
