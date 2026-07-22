@@ -2,6 +2,7 @@ export const STORAGE_KEY = "safe-play:v2";
 export const LEGACY_STORAGE_KEY = "gaming-guard:v2";
 export const SCHEMA_VERSION = 3;
 export const APP_VERSION = "2.1.0";
+export const APP_RELEASE_DATE = "2026-07-21";
 
 export const MOTIVES = [
   { value: "planned", label: "Запланированный отдых" },

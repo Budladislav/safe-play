@@ -1871,3 +1871,132 @@ input[type="range"] {
     transition-duration: 0.01ms !important;
   }
 }
+
+
+/* Centered personal layout */
+.view-header {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.view-header > div:first-child {
+  width: 100%;
+}
+
+.view-header p,
+.hero h1,
+.hero p {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.header-actions,
+.button-row,
+.inline-actions,
+.hero-actions {
+  justify-content: center;
+}
+
+.hero {
+  text-align: center;
+}
+
+.hero-actions {
+  flex-wrap: wrap;
+}
+
+.hero-hint {
+  text-align: center;
+}
+
+.card-header {
+  justify-content: center;
+  flex-wrap: wrap;
+  text-align: center;
+}
+
+.card-header > div {
+  flex: 1 1 100%;
+}
+
+.metric,
+.mini-metric {
+  text-align: center;
+}
+
+.section-heading {
+  justify-content: center;
+  text-align: center;
+}
+
+.section-heading > div {
+  width: 100%;
+}
+
+.modal-header {
+  justify-content: center;
+  padding-right: 70px;
+  padding-left: 70px;
+  text-align: center;
+}
+
+.modal-header > div {
+  width: 100%;
+}
+
+.modal-header > .icon-button {
+  position: absolute;
+  top: 22px;
+  right: 24px;
+}
+
+.modal-footer {
+  justify-content: center;
+  flex-wrap: wrap;
+  text-align: center;
+}
+
+.accent-card > .muted-text {
+  max-width: 620px;
+  margin-right: auto;
+  margin-left: auto;
+  text-align: center;
+}
+
+.brand-mark .playstation-symbol {
+  fill: var(--accent);
+  stroke: none;
+}
+
+.version-stamp {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 10px 4px 2px;
+  color: var(--subtle);
+  font-size: 11px;
+  text-align: center;
+}
+
+.version-stamp strong {
+  color: var(--muted);
+}
+
+@media (max-width: 760px) {
+  .view-header {
+    align-items: center;
+  }
+
+  .modal-header {
+    padding-right: 64px;
+    padding-left: 64px;
+  }
+
+  .modal-header > .icon-button {
+    top: 16px;
+    right: 18px;
+  }
+}

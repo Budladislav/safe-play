@@ -1,6 +1,7 @@
 import {
   STORAGE_KEY,
   APP_VERSION,
+  APP_RELEASE_DATE,
   MOTIVES,
   GAME_COLORS,
   LEGACY_STORAGE_KEY,
@@ -199,7 +200,6 @@ function renderActiveSession() {
         <div>
           <span class="eyebrow">Сессия идёт</span>
           <h1>${escapeHTML(game?.title || "Игра")}</h1>
-          <p>Таймер восстановится по времени старта, даже если Android выгрузит приложение.</p>
         </div>
         <div class="header-actions">
           <button class="button danger" data-action="open-finish">Завершить сессию</button>
@@ -306,7 +306,6 @@ function renderLibrary() {
         <div>
           <span class="eyebrow">Библиотека</span>
           <h1>Ваши игры</h1>
-          <p>Коллекция нужна для контекста и честного распределения времени — не для накопления.</p>
         </div>
         <div class="header-actions">
           ${cooldown ? `<button class="button" data-action="release-cooldown">Снять мягкую паузу</button>` : ""}
@@ -572,9 +571,6 @@ function renderSettings() {
           <article class="card accent-card">
             <div class="card-header"><div><span class="eyebrow">О приложении · v${APP_VERSION}</span><h2>Шлюз между импульсом и действием</h2></div><a class="button small" href="./CHANGELOG.md" target="_blank" rel="noopener">Ченджлог</a></div>
             <p class="muted-text">Safe Play не считает игры проблемой и не блокирует их силой. Он добавляет короткую паузу до старта, фиксирует выбранные границы и возвращает факты после.</p>
-            <div class="session-fact"><div class="fact-icon">✓</div><div><strong>Никакой геймификации контроля</strong><span>без серий, уровней, наград и достижений</span></div></div>
-            <div class="session-fact"><div class="fact-icon">⌁</div><div><strong>Полностью офлайн</strong><span>нет аккаунта, сервера и облачной синхронизации</span></div></div>
-            <div class="session-fact"><div class="fact-icon">◷</div><div><strong>Надёжный таймер</strong><span>основан на метке старта, а не на числе тиков</span></div></div>
           </article>
 
           <article class="card">
@@ -588,8 +584,10 @@ function renderSettings() {
 
           <article class="card danger-card">
             <div class="card-header"><div><h2>Сброс приложения</h2><p>Игры, история и настройки будут удалены</p></div></div>
-            <button class="button danger small" data-action="reset-data">Удалить все локальные данные</button>
+            <div class="button-row"><button class="button danger small" data-action="reset-data">Удалить все локальные данные</button></div>
           </article>
+
+          <div class="version-stamp"><span>Safe Play</span><strong>v${APP_VERSION}</strong><span>· обновлено ${formatReleaseDate(APP_RELEASE_DATE)}</span></div>
         </div>
       </div>
     </section>
@@ -1413,6 +1411,11 @@ function toDateTimeLocal(value) {
   const date = new Date(value);
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 16);
+}
+
+function formatReleaseDate(value) {
+  const [year, month, day] = String(value).split("-");
+  return `${day}.${month}.${year.slice(-2)}`;
 }
 
 function formatWeekRange(startValue, endValue) {
