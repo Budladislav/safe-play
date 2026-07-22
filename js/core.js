@@ -391,6 +391,15 @@ export function buildWeeklyStats(sessions, weeks = 8, now = new Date()) {
   return result;
 }
 
+export function getSessionsInRange(sessions, startValue, endValue) {
+  const start = new Date(startValue).getTime();
+  const end = new Date(endValue).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return [];
+  return sessions
+    .filter((session) => new Date(session.startedAt).getTime() >= start && new Date(session.startedAt).getTime() < end)
+    .sort((a, b) => new Date(a.startedAt) - new Date(b.startedAt));
+}
+
 export function buildHeatmapDays(byDay, weeks = 16, now = new Date()) {
   const end = new Date(now);
   end.setHours(0, 0, 0, 0);

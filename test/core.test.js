@@ -6,6 +6,7 @@ import {
   calculateSessionMetrics,
   createDefaultState,
   getAccumulatedPausedMs,
+  getSessionsInRange,
   getTimerState,
   normalizeState,
   shouldTriggerSessionWarning,
@@ -152,6 +153,20 @@ test("weekly statistics keep sessions in their Monday-to-Sunday buckets", () => 
   assert.equal(weeks[1].minutes, 80);
   assert.equal(weeks[1].sessions, 1);
   assert.equal(weeks[1].onTimePercent, 0);
+});
+
+test("report period includes its start and excludes its end", () => {
+  const sessions = [
+    { id: "before", startedAt: "2026-07-19T23:59:59.999Z" },
+    { id: "first", startedAt: "2026-07-20T00:00:00.000Z" },
+    { id: "second", startedAt: "2026-07-24T18:00:00.000Z" },
+    { id: "after", startedAt: "2026-07-27T00:00:00.000Z" }
+  ];
+  assert.deepEqual(
+    getSessionsInRange(sessions, "2026-07-20T00:00:00.000Z", "2026-07-27T00:00:00.000Z").map((session) => session.id),
+    ["first", "second"]
+  );
+  assert.deepEqual(getSessionsInRange(sessions, "invalid", "2026-07-27T00:00:00.000Z"), []);
 });
 
 test("heatmap always returns full weeks", () => {

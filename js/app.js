@@ -17,11 +17,13 @@ import {
   formatTimer,
   getAccumulatedPausedMs,
   getGameTotals,
+  getSessionsInRange,
   getTimerState,
   isCooldownActive,
   motiveLabel,
   normalizeState,
   shouldTriggerSessionWarning,
+  startOfWeek,
   summarizeStats
 } from "./core.js";
 
@@ -427,8 +429,9 @@ function renderStats() {
           <p>Главный сигнал — разница между заранее выбранным планом и тем, что произошло.</p>
         </div>
         <div class="button-row">
-          <button class="button" data-action="download-week-report">↓ Скачать неделю</button>
-          <button class="button primary" data-action="share-week-report">↗ Поделиться</button>
+          <button class="button" data-action="download-week-report">↓ Скачать картинку недели</button>
+          <button class="button" data-action="share-week-report">↗ Поделиться картинкой</button>
+          <button class="button primary" data-action="open-text-report">↓ Подробный TXT-отчёт</button>
         </div>
       </div>
 
@@ -1234,6 +1237,223 @@ function confirmDeleteSession(id) {
   });
 }
 
+function currentIsoWeekValue(date = new Date()) {
+  const target = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = target.getUTCDay() || 7;
+  target.setUTCDate(target.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((target - yearStart) / 86_400_000) + 1) / 7);
+  return `${target.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+function parseLocalDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return null;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatReportDate(value) {
+  return new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(value));
+}
+
+function formatReportDateTime(value) {
+  return new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+
+function openTextReportModal() {
+  const now = new Date();
+  const weekStart = startOfWeek(now);
+  openModal(`
+    <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="textReportTitle">
+      <div class="modal-header"><div><span class="eyebrow">Экспорт статистики</span><h2 id="textReportTitle">Подробный TXT-отчёт</h2><p>Выберите период. Файл можно отправить в любой мессенджер.</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
+      <form id="textReportForm">
+        <div class="modal-body">
+          <div class="field">
+            <label for="reportPeriodType">Интервал</label>
+            <select class="select" id="reportPeriodType" name="periodType">
+              <option value="week">Неделя</option>
+              <option value="month">Месяц</option>
+              <option value="custom">Свой интервал</option>
+            </select>
+          </div>
+          <div class="field" data-report-period-field="week">
+            <label for="reportWeek">Какая неделя</label>
+            <input class="input" id="reportWeek" type="week" name="week" value="${currentIsoWeekValue(now)}" required>
+          </div>
+          <div class="field" data-report-period-field="month" hidden>
+            <label for="reportMonth">Какой месяц</label>
+            <input class="input" id="reportMonth" type="month" name="month" value="${localDateKey(now).slice(0, 7)}">
+          </div>
+          <div class="form-grid" data-report-period-field="custom" hidden>
+            <div class="field"><label for="reportStart">С</label><input class="input" id="reportStart" type="date" name="start" value="${localDateKey(weekStart)}"></div>
+            <div class="field"><label for="reportEnd">По</label><input class="input" id="reportEnd" type="date" name="end" value="${localDateKey(now)}"></div>
+          </div>
+          <div class="notice"><span>i</span><div>В отчёт войдут завершённые сессии, сводные показатели и связанные события контроля. Активная сессия не учитывается до завершения.</div></div>
+        </div>
+        <div class="modal-footer"><button class="button ghost" type="button" data-close-modal>Отмена</button><button class="button primary" type="submit">Скачать TXT</button></div>
+      </form>
+    </div>
+  `);
+}
+
+function updateTextReportFields() {
+  const type = document.querySelector("#reportPeriodType")?.value || "week";
+  modalRoot.querySelectorAll("[data-report-period-field]").forEach((field) => {
+    field.hidden = field.dataset.reportPeriodField !== type;
+  });
+}
+
+function resolveTextReportPeriod(form) {
+  const data = new FormData(form);
+  const type = String(data.get("periodType") || "week");
+  let start;
+  let end;
+  let label;
+
+  if (type === "week") {
+    const match = /^(\d{4})-W(\d{2})$/.exec(String(data.get("week") || ""));
+    if (!match) throw new Error("Выберите неделю.");
+    start = startOfWeek(new Date(Number(match[1]), 0, 4));
+    start.setDate(start.getDate() + (Number(match[2]) - 1) * 7);
+    end = new Date(start);
+    end.setDate(end.getDate() + 7);
+    label = `Неделя ${formatReportDate(start)} — ${formatReportDate(new Date(end.getTime() - 1))}`;
+  } else if (type === "month") {
+    const match = /^(\d{4})-(\d{2})$/.exec(String(data.get("month") || ""));
+    if (!match) throw new Error("Выберите месяц.");
+    start = new Date(Number(match[1]), Number(match[2]) - 1, 1);
+    end = new Date(Number(match[1]), Number(match[2]), 1);
+    label = new Intl.DateTimeFormat("ru-RU", { month: "long", year: "numeric" }).format(start);
+  } else {
+    start = parseLocalDate(data.get("start"));
+    const inclusiveEnd = parseLocalDate(data.get("end"));
+    if (!start || !inclusiveEnd) throw new Error("Укажите начало и конец интервала.");
+    end = new Date(inclusiveEnd);
+    end.setDate(end.getDate() + 1);
+    if (end <= start) throw new Error("Конец интервала должен быть не раньше начала.");
+    label = `${formatReportDate(start)} — ${formatReportDate(inclusiveEnd)}`;
+  }
+
+  return { type, start, end, label };
+}
+
+function ratingSummary(sessions, field) {
+  const distribution = [1, 2, 3, 4, 5].map((rating) => sessions.filter((session) => Number(session[field]) === rating).length);
+  const average = sessions.length ? sessions.reduce((sum, session) => sum + Number(session[field] || 0), 0) / sessions.length : 0;
+  return `${average.toFixed(1)} из 5 · ${distribution.map((count, index) => `${index + 1}: ${count}`).join("; ")}`;
+}
+
+function eventLabel(type) {
+  return ({
+    override: "обход чек-листа",
+    extension: "продление",
+    "session-paused": "пауза",
+    "session-resumed": "продолжение после паузы",
+    "session-warning": "предупреждение о конце",
+    "cooldown-started": "cooldown включён",
+    "cooldown-released": "cooldown снят",
+    "session-edited": "сессия отредактирована"
+  })[type] || type || "событие";
+}
+
+function buildDetailedTextReport(period) {
+  const sessions = getSessionsInRange(state.sessions, period.start, period.end);
+  const events = state.events
+    .filter((event) => event.at && new Date(event.at) >= period.start && new Date(event.at) < period.end)
+    .sort((a, b) => new Date(a.at) - new Date(b.at));
+  const totalActual = sessions.reduce((sum, session) => sum + Number(session.actualMinutes || 0), 0);
+  const totalPlanned = sessions.reduce((sum, session) => sum + Number(session.plannedMinutes || 0), 0);
+  const totalPausedMs = sessions.reduce((sum, session) => sum + Number(session.totalPausedMs || 0), 0);
+  const onTimeCount = sessions.filter((session) => session.onTime).length;
+  const extensions = sessions.reduce((sum, session) => sum + (session.extensions?.length || 0), 0);
+  const overrides = sessions.filter((session) => session.override).length;
+  const lateSessions = sessions.filter((session) => new Date(session.startedAt).getHours() >= state.settings.lateHour).length;
+  const motives = {};
+  const games = {};
+  sessions.forEach((session) => {
+    (session.motives || (session.motive ? [session.motive] : [])).forEach((motive) => { motives[motive] = (motives[motive] || 0) + 1; });
+    games[session.gameId] = (games[session.gameId] || 0) + Number(session.actualMinutes || 0);
+  });
+  const drift = totalActual - totalPlanned;
+  const lines = [
+    "SAFE PLAY — ПОДРОБНЫЙ ОТЧЁТ",
+    `Период: ${period.label}`,
+    `Создан: ${formatReportDateTime(new Date())}`,
+    `Версия приложения: ${APP_VERSION}`,
+    "",
+    "СВОДКА",
+    `Завершённых сессий: ${sessions.length}`,
+    `Игровое время: ${formatDuration(totalActual)}`,
+    `Плановое время: ${formatDuration(totalPlanned)}`,
+    `Отклонение факт − план: ${drift > 0 ? "+" : drift < 0 ? "−" : ""}${formatDuration(Math.abs(drift))}`,
+    `Завершены вовремя: ${sessions.length ? Math.round(onTimeCount / sessions.length * 100) : 0}% (${onTimeCount} из ${sessions.length})`,
+    `Продлений: ${extensions}`,
+    `Обходов чек-листа: ${overrides}`,
+    `Поздних сессий (с ${state.settings.lateHour}:00): ${lateSessions}`,
+    `Суммарное время на паузе: ${formatDuration(totalPausedMs / 60_000)}`,
+    `Состояние до игры: ${ratingSummary(sessions, "preState")}`,
+    `Удовлетворение от игры: ${ratingSummary(sessions, "satisfaction")}`,
+    `Желание продолжить: ${ratingSummary(sessions, "compulsivity")}`,
+    "",
+    "ПРИЧИНЫ ИГРАТЬ",
+    ...(Object.keys(motives).length ? Object.entries(motives).sort((a, b) => b[1] - a[1]).map(([motive, count]) => `${motiveLabel(motive)}: ${count}`) : ["Не указаны"]),
+    "",
+    "ВРЕМЯ ПО ИГРАМ",
+    ...(Object.keys(games).length ? Object.entries(games).sort((a, b) => b[1] - a[1]).map(([gameId, minutes]) => `${gameById(gameId)?.title || "Удалённая игра"}: ${formatDuration(minutes)}`) : ["Нет завершённых сессий"]),
+    "",
+    "СЕССИИ"
+  ];
+
+  if (!sessions.length) lines.push("Нет завершённых сессий за выбранный период.");
+  sessions.forEach((session, index) => {
+    const game = gameById(session.gameId)?.title || "Удалённая игра";
+    const sessionMotives = session.motives || (session.motive ? [session.motive] : []);
+    const checklist = Object.entries(session.checklistResults || {}).map(([id, passed]) => `${state.checklist.find((item) => item.id === id)?.title || id}: ${passed ? "да" : "нет"}`);
+    lines.push(
+      "",
+      `${index + 1}. ${game}`,
+      `Начало: ${formatReportDateTime(session.startedAt)}`,
+      `Окончание: ${formatReportDateTime(session.endedAt)}`,
+      `План: ${formatDuration(session.plannedMinutes)} · факт: ${formatDuration(session.actualMinutes)} · перерасход: ${formatDuration(session.overtimeMinutes)}`,
+      `Остановился вовремя: ${session.onTime ? "да" : "нет"}`,
+      `Состояние до: ${session.preState}/5`,
+      `Причины: ${sessionMotives.length ? sessionMotives.map(motiveLabel).join(", ") : "не указаны"}`,
+      `Удовлетворение: ${session.satisfaction}/5`,
+      `Желание продолжить: ${session.compulsivity}/5`,
+      `Что после: ${session.afterAction || "не указано"} · подтверждено: ${session.afterActionConfirmed ? "да" : "нет"}`,
+      `Чем закончилась: ${session.outcomeNote || "без заметки"}`,
+      `Чек-лист: ${checklist.length ? checklist.join("; ") : "нет сохранённых ответов"}`,
+      `Паузы: ${session.pauses?.length || 0} · ${formatDuration(Number(session.totalPausedMs || 0) / 60_000)}`,
+      `Продления: ${session.extensions?.length ? session.extensions.map((extension) => `+${extension.minutes} мин — ${extension.reason || "без причины"}`).join("; ") : "не было"}`,
+      `Обход чек-листа: ${session.override ? session.override.reason || "причина не указана" : "не использовался"}`
+    );
+  });
+
+  lines.push("", "СОБЫТИЯ КОНТРОЛЯ");
+  if (!events.length) lines.push("Нет событий за выбранный период.");
+  events.forEach((event) => {
+    const details = event.reason ? ` · ${event.reason}` : event.minutes ? ` · +${event.minutes} мин` : event.leadMinutes ? ` · за ${event.leadMinutes} мин` : "";
+    lines.push(`${formatReportDateTime(event.at)} · ${eventLabel(event.type)}${details}`);
+  });
+
+  return lines.join("\n");
+}
+
+function downloadDetailedTextReport(form) {
+  try {
+    const period = resolveTextReportPeriod(form);
+    const text = buildDetailedTextReport(period);
+    const startKey = localDateKey(period.start);
+    const endKey = localDateKey(new Date(period.end.getTime() - 1));
+    downloadBlob(new Blob(["\uFEFF", text], { type: "text/plain;charset=utf-8" }), `safe-play-report-${startKey}_${endKey}.txt`);
+    closeModal();
+    toast("Текстовый отчёт готов", `Сохранён период: ${period.label}.`);
+  } catch (error) {
+    toast("Не удалось создать отчёт", error.message);
+  }
+}
+
 function buildCurrentWeekReport() {
   const stats = summarizeStats(state);
   const week = stats.weeks.at(-1);
@@ -1622,6 +1842,7 @@ document.addEventListener("click", (event) => {
     "delete-session": () => confirmDeleteSession(id),
     "download-week-report": downloadWeekReport,
     "share-week-report": shareWeekReport,
+    "open-text-report": openTextReportModal,
     "add-check": () => openCheckModal(),
     "edit-check": () => openCheckModal(state.checklist.find((item) => item.id === id)),
     "delete-check": () => deleteCheck(id),
@@ -1649,6 +1870,7 @@ document.addEventListener("submit", (event) => {
   if (form.id === "checkForm") saveCheck(form);
   if (form.id === "releaseCooldownForm") releaseCooldown(form);
   if (form.id === "editSessionForm") updateSession(form);
+  if (form.id === "textReportForm") downloadDetailedTextReport(form);
 });
 
 document.addEventListener("input", (event) => {
@@ -1662,6 +1884,7 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", (event) => {
   const target = event.target;
   if (target.id === "plannedMinutes") updatePlanPreview();
+  if (target.id === "reportPeriodType") updateTextReportFields();
   if (target.dataset.setting === "extension-limit") state.settings.extensionLimit = Number(target.value);
   if (target.dataset.setting === "late-hour") state.settings.lateHour = Number(target.value);
   if (target.dataset.setting === "keep-awake") state.settings.keepAwake = target.checked;
