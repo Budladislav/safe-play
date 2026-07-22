@@ -20,6 +20,7 @@ import {
   getSessionsInRange,
   getTimerState,
   isCooldownActive,
+  localDateKey,
   motiveLabel,
   normalizeState,
   shouldTriggerSessionWarning,
@@ -599,7 +600,7 @@ function renderSettings() {
                 </div>
                 <label for="warningLeadMinutes">Когда предупредить</label>
                 <select class="select" id="warningLeadMinutes" data-setting="warning-lead">
-                  ${SESSION_WARNING_LEADS.map((value) => `<option value="${value}" ${state.settings.warningLeadMinutes === value ? "selected" : ""}>За ${value} ${value === 1 ? "минуту" : "минут"}</option>`).join("")}
+                  ${SESSION_WARNING_LEADS.map((value) => `<option value="${value}" ${state.settings.warningLeadMinutes === value ? "selected" : ""}>За ${value} ${plural(value, ["минуту", "минуты", "минут"])}</option>`).join("")}
                 </select>
                 <small>${state.settings.warningSound || state.settings.warningVibration ? "Активные способы можно сочетать." : "Сейчас выключено: включите звук, вибрацию или оба способа."}</small>
               </div>
@@ -1467,7 +1468,7 @@ function downloadDetailedTextReport(form) {
     const endKey = localDateKey(new Date(period.end.getTime() - 1));
     downloadBlob(new Blob(["\uFEFF", text], { type: "text/plain;charset=utf-8" }), `safe-play-report-${startKey}_${endKey}.txt`);
     closeModal();
-    toast("Текстовый отчёт готов", `Сохранён период: ${period.label}.`);
+    toast("Текстовый отчёт готов", `Сохранён период: ${period.label}`);
   } catch (error) {
     toast("Не удалось создать отчёт", error.message);
   }
