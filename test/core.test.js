@@ -8,6 +8,8 @@ import {
   createDefaultState,
   getAvailableWeekCount,
   getAccumulatedPausedMs,
+  getGameTotals,
+  getSessionGameBreakdown,
   getSessionsInRange,
   getTimerState,
   normalizeState,
@@ -91,7 +93,7 @@ test("import normalization preserves valid data and clamps settings", () => {
     events: [],
     settings: { extensionLimit: 99, lateHour: 4 }
   });
-  assert.equal(normalized.version, 4);
+  assert.equal(normalized.version, 5);
   assert.equal(normalized.games[0].title, "Test");
   assert.equal(normalized.settings.extensionLimit, 5);
   assert.equal(normalized.settings.lateHour, 18);
@@ -192,4 +194,54 @@ test("monthly heatmap separates calendar months and can select active history", 
   assert.equal(recent[2].days.find((day) => day?.key === "2026-07-20").level, 4);
   const active = buildHeatmapMonths(byDay, 3, new Date("2026-07-22T12:00:00"), true);
   assert.deepEqual(active.map((month) => month.key), ["2026-04", "2026-06", "2026-07"]);
+});
+
+
+test("legacy single-game sessions migrate to one game segment", () => {
+  const normalized = normalizeState({
+    games: [{ id: "g1", title: "Game" }],
+    sessions: [{
+      id: "s1",
+      gameId: "g1",
+      startedAt: "2026-07-20T10:00:00.000Z",
+      endedAt: "2026-07-20T11:00:00.000Z",
+      plannedMinutes: 60,
+      actualMinutes: 60
+    }]
+  });
+  assert.equal(normalized.sessions[0].gameSegments.length, 1);
+  assert.equal(normalized.sessions[0].gameSegments[0].gameId, "g1");
+  assert.equal(normalized.sessions[0].gameSegments[0].durationMs, 60 * 60_000);
+});
+
+test("game breakdown aggregates repeated segments and a running segment", () => {
+  const breakdown = getSessionGameBreakdown({
+    gameSegments: [
+      { gameId: "g1", startedAt: "2026-07-20T10:00:00.000Z", endedAt: "2026-07-20T10:20:00.000Z", durationMs: 20 * 60_000 },
+      { gameId: "g2", startedAt: "2026-07-20T10:20:00.000Z", endedAt: "2026-07-20T10:35:00.000Z", durationMs: 15 * 60_000 },
+      { gameId: "g1", startedAt: "2026-07-20T10:35:00.000Z", endedAt: null, durationMs: 0 }
+    ]
+  }, new Date("2026-07-20T10:45:00.000Z").getTime());
+  assert.deepEqual(breakdown.map(({ gameId, minutes }) => [gameId, minutes]), [["g1", 30], ["g2", 15]]);
+});
+
+test("game totals count a multi-game session once for every played game", () => {
+  const state = createDefaultState();
+  state.games = [{ id: "g1" }, { id: "g2" }];
+  state.sessions = [{
+    id: "s1",
+    gameId: "g1",
+    actualMinutes: 60,
+    gameSegments: [
+      { gameId: "g1", startedAt: "2026-07-20T10:00:00.000Z", endedAt: "2026-07-20T10:40:00.000Z", durationMs: 40 * 60_000 },
+      { gameId: "g2", startedAt: "2026-07-20T10:40:00.000Z", endedAt: "2026-07-20T11:00:00.000Z", durationMs: 20 * 60_000 }
+    ]
+  }];
+  assert.deepEqual(getGameTotals(state), {
+    g1: { minutes: 40, sessions: 1 },
+    g2: { minutes: 20, sessions: 1 }
+  });
+  const stats = summarizeStats(state, new Date("2026-07-20T12:00:00.000Z"));
+  assert.equal(stats.byGame.g1, 40);
+  assert.equal(stats.byGame.g2, 20);
 });

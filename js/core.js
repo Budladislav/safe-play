@@ -1,6 +1,6 @@
 export const STORAGE_KEY = "safe-play:v2";
 export const LEGACY_STORAGE_KEY = "gaming-guard:v2";
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 export const APP_VERSION = "2.2.1";
 export const APP_RELEASE_DATE = "2026-07-22";
 
@@ -109,10 +109,11 @@ function normalizeSession(session) {
   const plannedMinutes = Math.max(1, Number(session.plannedMinutes || session.basePlannedMinutes || 1));
   const actualMinutes = Math.max(0, Number(session.actualMinutes || 0));
   const motives = normalizeMotives(session);
+  const gameSegments = normalizeGameSegments(session, false);
   return {
     ...session,
     id: String(session.id || createId("session")),
-    gameId: String(session.gameId),
+    gameId: String(session.gameId || gameSegments[0]?.gameId || ""),
     startedAt: session.startedAt,
     endedAt: session.endedAt,
     basePlannedMinutes: Math.max(1, Number(session.basePlannedMinutes || plannedMinutes)),
@@ -123,6 +124,7 @@ function normalizeSession(session) {
     extensions: Array.isArray(session.extensions) ? session.extensions : [],
     pauses: Array.isArray(session.pauses) ? session.pauses : [],
     totalPausedMs: Math.max(0, Number(session.totalPausedMs || 0)),
+    gameSegments,
     checklistResults: session.checklistResults && typeof session.checklistResults === "object" ? session.checklistResults : {},
     preState: clamp(Number(session.preState ?? 3), 1, 5),
     satisfaction: clamp(Number(session.satisfaction ?? 3), 1, 5),
@@ -139,10 +141,13 @@ function normalizeSession(session) {
 function normalizeActiveSession(session) {
   const planned = Math.max(1, Number(session.plannedMinutes || session.basePlannedMinutes || 1));
   const motives = normalizeMotives(session);
+  const gameSegments = normalizeGameSegments(session, true);
+  const fallbackGameId = String(session.gameId || gameSegments[0]?.gameId || "");
   return {
     ...session,
     id: String(session.id || createId("session")),
-    gameId: String(session.gameId),
+    gameId: fallbackGameId,
+    currentGameId: String(session.currentGameId || gameSegments.at(-1)?.gameId || fallbackGameId),
     startedAt: session.startedAt,
     basePlannedMinutes: Math.max(1, Number(session.basePlannedMinutes || planned)),
     plannedMinutes: planned,
@@ -152,6 +157,7 @@ function normalizeActiveSession(session) {
     extensions: Array.isArray(session.extensions) ? session.extensions : [],
     pauses: Array.isArray(session.pauses) ? session.pauses : [],
     totalPausedMs: Math.max(0, Number(session.totalPausedMs || 0)),
+    gameSegments,
     pausedAt: validIso(session.pausedAt) ? session.pausedAt : null,
     warningForEndAt: validIso(session.warningForEndAt) ? session.warningForEndAt : null,
     checklistResults: session.checklistResults && typeof session.checklistResults === "object" ? session.checklistResults : {},
@@ -178,18 +184,96 @@ function normalizeMotives(session) {
   return [...new Set(raw.map(String).filter((value) => allowed.has(value)))];
 }
 
+function normalizeGameSegments(session, active) {
+  const fallbackGameId = String(session.gameId || session.currentGameId || "");
+  const rawSegments = Array.isArray(session.gameSegments) ? session.gameSegments : [];
+  const normalized = rawSegments
+    .filter((segment) => segment && typeof segment === "object" && (segment.gameId || fallbackGameId) && validIso(segment.startedAt))
+    .map((segment) => {
+      const endedAt = validIso(segment.endedAt) ? segment.endedAt : null;
+      const derivedDuration = endedAt
+        ? Math.max(0, new Date(endedAt).getTime() - new Date(segment.startedAt).getTime())
+        : 0;
+      const duration = Number(segment.durationMs);
+      return {
+        id: String(segment.id || createId("game-segment")),
+        gameId: String(segment.gameId || fallbackGameId),
+        startedAt: segment.startedAt,
+        endedAt,
+        durationMs: Math.max(0, Number.isFinite(duration) ? duration : derivedDuration)
+      };
+    });
+
+  if (normalized.length || !fallbackGameId || !validIso(session.startedAt)) return normalized;
+
+  if (!active && validIso(session.endedAt)) {
+    const fallbackDuration = Math.max(0, new Date(session.endedAt).getTime() - new Date(session.startedAt).getTime() - Math.max(0, Number(session.totalPausedMs || 0)));
+    return [{
+      id: createId("game-segment"),
+      gameId: fallbackGameId,
+      startedAt: session.startedAt,
+      endedAt: session.endedAt,
+      durationMs: Math.max(0, Number(session.actualMinutes || 0) * 60_000 || fallbackDuration)
+    }];
+  }
+
+  const now = Date.now();
+  const pausedAt = validIso(session.pausedAt) ? new Date(session.pausedAt).getTime() : null;
+  const effectiveNow = pausedAt ?? now;
+  const migratedDuration = Math.max(0, effectiveNow - new Date(session.startedAt).getTime() - Math.max(0, Number(session.totalPausedMs || 0)));
+  return [{
+    id: createId("game-segment"),
+    gameId: fallbackGameId,
+    startedAt: pausedAt ? session.startedAt : new Date(now).toISOString(),
+    endedAt: pausedAt ? session.pausedAt : null,
+    durationMs: migratedDuration
+  }];
+}
+
+function segmentDurationMs(segment, at = Date.now()) {
+  const stored = Math.max(0, Number(segment?.durationMs || 0));
+  if (!segment || validIso(segment.endedAt) || !validIso(segment.startedAt)) return stored;
+  return stored + Math.max(0, Number(at) - new Date(segment.startedAt).getTime());
+}
+
+export function getSessionGameBreakdown(session, at = Date.now()) {
+  const segments = Array.isArray(session?.gameSegments) ? session.gameSegments : [];
+  const totals = new Map();
+
+  if (!segments.length && session?.gameId) {
+    const durationMs = Math.max(0, Number(session.actualMinutes || 0) * 60_000);
+    return [{ gameId: String(session.gameId), durationMs, minutes: durationMs / 60_000 }];
+  }
+
+  segments.forEach((segment) => {
+    if (!segment?.gameId) return;
+    const gameId = String(segment.gameId);
+    totals.set(gameId, (totals.get(gameId) || 0) + segmentDurationMs(segment, at));
+  });
+
+  return [...totals.entries()].map(([gameId, durationMs]) => ({
+    gameId,
+    durationMs,
+    minutes: durationMs / 60_000
+  }));
+}
+
+export function getSessionGameIds(session) {
+  return getSessionGameBreakdown(session).map((item) => item.gameId);
+}
+
 function isValidSession(session) {
   return Boolean(
     session &&
     typeof session === "object" &&
-    session.gameId &&
+    (session.gameId || session.gameSegments?.some((segment) => segment?.gameId)) &&
     validIso(session.startedAt) &&
     validIso(session.endedAt)
   );
 }
 
 function isValidActiveSession(session) {
-  return Boolean(session && typeof session === "object" && session.gameId && validIso(session.startedAt));
+  return Boolean(session && typeof session === "object" && (session.gameId || session.gameSegments?.some((segment) => segment?.gameId)) && validIso(session.startedAt));
 }
 
 export function validIso(value) {
@@ -295,9 +379,11 @@ export function isCooldownActive(cooldown, now = Date.now()) {
 export function getGameTotals(state) {
   const totals = Object.fromEntries(state.games.map((game) => [game.id, { minutes: 0, sessions: 0 }]));
   state.sessions.forEach((session) => {
-    if (!totals[session.gameId]) totals[session.gameId] = { minutes: 0, sessions: 0 };
-    totals[session.gameId].minutes += Number(session.actualMinutes) || 0;
-    totals[session.gameId].sessions += 1;
+    getSessionGameBreakdown(session).forEach(({ gameId, minutes }) => {
+      if (!totals[gameId]) totals[gameId] = { minutes: 0, sessions: 0 };
+      totals[gameId].minutes += minutes;
+      totals[gameId].sessions += 1;
+    });
   });
   return totals;
 }
@@ -327,7 +413,9 @@ export function summarizeStats(state, now = new Date()) {
   sessions.forEach((session) => {
     const key = localDateKey(session.startedAt);
     byDay[key] = (byDay[key] || 0) + Number(session.actualMinutes || 0);
-    byGame[session.gameId] = (byGame[session.gameId] || 0) + Number(session.actualMinutes || 0);
+    getSessionGameBreakdown(session).forEach(({ gameId, minutes }) => {
+      byGame[gameId] = (byGame[gameId] || 0) + minutes;
+    });
     normalizeMotives(session).forEach((motive) => { motives[motive] = (motives[motive] || 0) + 1; });
     preState[clamp(Number(session.preState ?? 3), 1, 5) - 1] += 1;
     satisfaction[clamp(Number(session.satisfaction ?? 3), 1, 5) - 1] += 1;
