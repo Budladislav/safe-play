@@ -17,6 +17,8 @@ import {
   formatTimer,
   getAccumulatedPausedMs,
   getGameTotals,
+  getSessionGameBreakdown,
+  getSessionGameIds,
   getSessionsInRange,
   getTimerState,
   isCooldownActive,
@@ -109,7 +111,7 @@ function renderHome() {
   const stats = summarizeStats(state);
   const cooldown = isCooldownActive(state.cooldown);
   const lastSession = [...state.sessions].sort((a, b) => new Date(b.endedAt) - new Date(a.endedAt))[0];
-  const lastGame = lastSession ? gameById(lastSession.gameId) : null;
+  const lastGameLabel = lastSession ? sessionGameLabel(lastSession) : "";
 
   return `
     <section class="view">
@@ -163,9 +165,9 @@ function renderHome() {
             </div>
             ${lastSession ? `
               <div class="session-fact">
-                <div class="fact-icon">${escapeHTML((lastGame?.title || "?").slice(0, 1).toUpperCase())}</div>
+                <div class="fact-icon">${getSessionGameIds(lastSession).length || 1}</div>
                 <div>
-                  <strong>${escapeHTML(lastGame?.title || "Удалённая игра")}</strong>
+                  <strong>${escapeHTML(lastGameLabel)}</strong>
                   <span>${formatDuration(lastSession.actualMinutes)} · ${lastSession.onTime ? "в границах плана" : `+${formatDuration(lastSession.overtimeMinutes)}`}</span>
                 </div>
               </div>
@@ -198,7 +200,7 @@ function renderCooldownBanner() {
 
 function renderActiveSession() {
   const session = state.activeSession;
-  const game = gameById(session.gameId);
+  const currentGame = gameById(activeGameId(session));
   const timer = getTimerState(session);
   const extensionsLeft = Math.max(0, state.settings.extensionLimit - session.extensions.length);
   lastTimerWasOvertime = timer.isOvertime;
@@ -208,9 +210,11 @@ function renderActiveSession() {
       <div class="view-header">
         <div>
           <span class="eyebrow">${timer.isPaused ? "Сессия на паузе" : "Сессия идёт"}</span>
-          <h1>${escapeHTML(game?.title || "Игра")}</h1>
+          <h1>${escapeHTML(currentGame?.title || "Игра")}</h1>
+          <p>Общий план сессии сохраняется при переключении между играми.</p>
         </div>
         <div class="header-actions">
+          <button class="button" data-action="open-game-switch" ${state.games.length < 2 ? "disabled" : ""}>Сменить игру</button>
           <button class="button danger" data-action="open-finish">Завершить сессию</button>
         </div>
       </div>
@@ -243,6 +247,14 @@ function renderActiveSession() {
         </article>
 
         <div class="stack">
+          <article class="card compact">
+            <div class="card-header">
+              <div><h3>Игры в сессии</h3><p>Время считается отдельно, граница остаётся общей.</p></div>
+              <button class="button small" data-action="open-game-switch" ${state.games.length < 2 ? "disabled" : ""}>Сменить</button>
+            </div>
+            <div id="activeGameBreakdown">${renderSessionGameBreakdown(session, true)}</div>
+          </article>
+
           <article class="card compact">
             <div class="card-header">
               <div><h3>Зафиксированный план</h3><p>Не обещание, а ориентир для решения.</p></div>
@@ -298,6 +310,7 @@ function tickTimer() {
 
   value.textContent = formatTimer(timer.remainingMs);
   if (progress) progress.style.width = `${timer.progress}%`;
+  refreshActiveGameDurations();
 
   if (shouldTriggerSessionWarning(state.activeSession, state.settings)) {
     triggerSessionWarning();
@@ -361,7 +374,7 @@ function renderGameCard(game, totals = { minutes: 0, sessions: 0 }, cooldown = f
         <p>${totals.sessions} ${plural(totals.sessions, ["сессия", "сессии", "сессий"])}</p>
       </div>
       <div class="game-card-footer">
-        <div class="game-time"><strong>${formatDuration(totals.minutes)}</strong><span>всего в игре</span></div>
+        <div class="game-time"><strong>${formatGameDuration(totals.minutes)}</strong><span>всего в игре</span></div>
         ${cooldown ? `<span class="lock-chip">◇ пауза</span>` : `<button class="button small" data-action="open-entry" data-game-id="${escapeAttr(game.id)}">Играть</button>`}
       </div>
     </article>
@@ -384,11 +397,11 @@ function renderHistory() {
         <article class="card">
           <div class="history-list">
             ${sessions.map((session) => {
-              const game = gameById(session.gameId);
+              const gameLabel = sessionGameLabel(session);
               return `
                 <button class="history-item" data-action="session-details" data-id="${escapeAttr(session.id)}" style="color:inherit;text-align:left;cursor:pointer">
                   <div class="history-main">
-                    <strong>${escapeHTML(game?.title || "Удалённая игра")}</strong>
+                    <strong>${escapeHTML(gameLabel)}</strong>
                     <span>${formatDateTime(session.startedAt)}</span>
                   </div>
                   <div class="history-stat">
@@ -484,7 +497,7 @@ function renderStats() {
           ${recent.length ? `
             <div class="plan-actual-chart">
               ${recent.map((session) => `
-                <div class="plan-group" title="${escapeAttr(gameById(session.gameId)?.title || "Игра")}: план ${session.plannedMinutes}, факт ${session.actualMinutes} мин">
+                <div class="plan-group" title="${escapeAttr(sessionGameLabel(session))}: план ${session.plannedMinutes}, факт ${session.actualMinutes} мин">
                   <span class="plan-column" style="height:${Math.max(2, session.plannedMinutes / maxPlanActual * 100)}%"></span>
                   <span class="actual-column ${session.onTime ? "" : "over"}" style="height:${Math.max(2, session.actualMinutes / maxPlanActual * 100)}%"></span>
                 </div>
@@ -502,7 +515,7 @@ function renderStats() {
             <div class="bar-row">
               <span class="bar-label">${escapeHTML(gameById(gameId)?.title || "Удалённая игра")}</span>
               <span class="bar-track"><span class="bar-fill" style="display:block;width:${minutes / maxGame * 100}%"></span></span>
-              <span class="bar-value">${formatDuration(minutes)}</span>
+              <span class="bar-value">${formatGameDuration(minutes)}</span>
             </div>
           `).join("")}</div>` : `<p class="muted-text">Пока нет данных.</p>`}
         </article>
@@ -700,7 +713,7 @@ function openEntryModal(preselectedGameId = "") {
               <div class="field">
                 <label for="plannedMinutes">Плановая длительность</label>
                 <select class="select" id="plannedMinutes" name="plannedMinutes">
-                  ${[30,45,60,90,120,180].map((minutes) => `<option value="${minutes}" ${minutes === 60 ? "selected" : ""}>${formatDuration(minutes)}</option>`).join("")}
+                  ${[30,45,60,90,120,180].map((minutes) => `<option value="${minutes}" ${minutes === 60 ? "selected" : ""}>${formatGameDuration(minutes)}</option>`).join("")}
                 </select>
               </div>
               <div class="field full">
@@ -751,6 +764,8 @@ function beginSession(payload, override = null) {
   state.activeSession = {
     id: createId("session"),
     gameId: payload.gameId,
+    currentGameId: payload.gameId,
+    gameSegments: [{ id: createId("game-segment"), gameId: payload.gameId, startedAt: startedAt.toISOString(), endedAt: null, durationMs: 0 }],
     startedAt: startedAt.toISOString(),
     plannedEndAt: plannedEndAt.toISOString(),
     basePlannedMinutes: payload.plannedMinutes,
@@ -838,6 +853,96 @@ function setupHoldButton(button, onComplete) {
   button.addEventListener("keyup", reset);
 }
 
+function activeGameId(session = state.activeSession) {
+  return String(session?.currentGameId || session?.gameSegments?.at(-1)?.gameId || session?.gameId || "");
+}
+
+function closeCurrentGameSegment(session, atValue = new Date()) {
+  const at = atValue instanceof Date ? atValue : new Date(atValue);
+  const segments = Array.isArray(session.gameSegments) ? session.gameSegments : [];
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const segment = segments[index];
+    if (segment.endedAt) continue;
+    const elapsed = Math.max(0, at.getTime() - new Date(segment.startedAt).getTime());
+    segment.durationMs = Math.max(0, Number(segment.durationMs || 0)) + elapsed;
+    segment.endedAt = at.toISOString();
+    return segment;
+  }
+  return null;
+}
+
+function startGameSegment(session, gameId, atValue = new Date()) {
+  const at = atValue instanceof Date ? atValue : new Date(atValue);
+  session.gameSegments = Array.isArray(session.gameSegments) ? session.gameSegments : [];
+  session.gameSegments.push({ id: createId("game-segment"), gameId: String(gameId), startedAt: at.toISOString(), endedAt: null, durationMs: 0 });
+}
+
+function renderSessionGameBreakdown(session, live = false) {
+  const currentId = activeGameId(session);
+  const items = getSessionGameBreakdown(session);
+  if (!items.length) return '<p class="muted-text">Игровое время ещё не зафиксировано.</p>';
+  return items.map(({ gameId, minutes }) => {
+    const game = gameById(gameId);
+    const isCurrent = live && gameId === currentId;
+    return `<div class="session-fact">
+      <div class="fact-icon" style="color:${escapeAttr(game?.color || "var(--accent)")}">${escapeHTML((game?.title || "?").slice(0, 1).toUpperCase())}</div>
+      <div><strong>${escapeHTML(game?.title || "Удалённая игра")}</strong><span data-game-duration="${escapeAttr(gameId)}">${formatGameDuration(minutes)}</span></div>
+      ${isCurrent ? '<span class="status-pill info">сейчас</span>' : ""}
+    </div>`;
+  }).join("");
+}
+
+function refreshActiveGameDurations() {
+  if (!state.activeSession) return;
+  getSessionGameBreakdown(state.activeSession).forEach(({ gameId, minutes }) => {
+    const target = document.querySelector(`[data-game-duration="${CSS.escape(gameId)}"]`);
+    if (target) target.textContent = formatGameDuration(minutes);
+  });
+}
+
+function openGameSwitchModal() {
+  const session = state.activeSession;
+  if (!session) return;
+  const currentId = activeGameId(session);
+  const alternatives = state.games.filter((game) => game.id !== currentId);
+  if (!alternatives.length) {
+    toast("Нет другой игры", "Добавьте ещё одну игру в библиотеку, чтобы переключаться внутри сессии.");
+    return;
+  }
+  const currentGame = gameById(currentId);
+  openModal(`
+    <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="switchGameTitle">
+      <div class="modal-header"><div><span class="eyebrow">Та же сессия</span><h2 id="switchGameTitle">Сменить игру</h2><p>Общий таймер, план и продления не изменятся.</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
+      <form id="switchGameForm">
+        <div class="modal-body">
+          <div class="session-fact"><div class="fact-icon">→</div><div><strong>${escapeHTML(currentGame?.title || "Текущая игра")}</strong><span>время этой игры будет зафиксировано до момента переключения</span></div></div>
+          <div class="field"><label for="switchGameId">Продолжить с</label><select class="select" id="switchGameId" name="gameId" required>${alternatives.map((game) => `<option value="${escapeAttr(game.id)}">${escapeHTML(game.title)}</option>`).join("")}</select></div>
+          ${session.pausedAt ? '<div class="notice"><span>i</span><div>Сессия на паузе. Новая игра начнёт учитывать время после продолжения таймера.</div></div>' : ""}
+        </div>
+        <div class="modal-footer"><button class="button ghost" type="button" data-close-modal>Отмена</button><button class="button primary" type="submit">Переключиться</button></div>
+      </form>
+    </div>
+  `);
+}
+
+function switchActiveGame(form) {
+  const session = state.activeSession;
+  if (!session) return;
+  const gameId = String(new FormData(form).get("gameId") || "");
+  const game = gameById(gameId);
+  const previousGameId = activeGameId(session);
+  if (!game || gameId === previousGameId) return;
+  const at = new Date();
+  if (!session.pausedAt) closeCurrentGameSegment(session, at);
+  session.currentGameId = gameId;
+  if (!session.pausedAt) startGameSegment(session, gameId, at);
+  state.events.push({ id: createId("event"), type: "game-switched", at: at.toISOString(), sessionId: session.id, fromGameId: previousGameId, toGameId: gameId });
+  saveState();
+  closeModal();
+  render();
+  toast("Игра переключена", `Теперь учитывается время в «${game.title}».`);
+}
+
 function toggleSessionPause() {
   const session = state.activeSession;
   if (!session) return;
@@ -851,12 +956,14 @@ function toggleSessionPause() {
     if (session.warningForEndAt === previousEndAt) session.warningForEndAt = session.plannedEndAt;
     session.pauses = [...(session.pauses || []), pause];
     session.pausedAt = null;
+    startGameSegment(session, activeGameId(session), now);
     state.events.push({ id: createId("event"), type: "session-resumed", at: pause.endedAt, sessionId: session.id, durationMs });
     saveState();
     render();
     toast("Сессия продолжена", `Новая точка окончания — ${formatClock(session.plannedEndAt)}.`);
     return;
   }
+  closeCurrentGameSegment(session, now);
   session.pausedAt = now.toISOString();
   state.events.push({ id: createId("event"), type: "session-paused", at: session.pausedAt, sessionId: session.id });
   saveState();
@@ -895,6 +1002,7 @@ function finishSession(form) {
   const data = new FormData(form);
   const endedAt = new Date().toISOString();
   const endedAtMs = new Date(endedAt).getTime();
+  if (!active.pausedAt) closeCurrentGameSegment(active, endedAt);
   const totalPausedMs = getAccumulatedPausedMs(active, endedAtMs);
   const pauses = active.pausedAt
     ? [...(active.pauses || []), { startedAt: active.pausedAt, endedAt, durationMs: Math.max(0, endedAtMs - new Date(active.pausedAt).getTime()) }]
@@ -935,10 +1043,10 @@ function finishSession(form) {
 }
 
 function openSessionSummary(session, cooldownTriggered) {
-  const game = gameById(session.gameId);
+  const gameLabel = sessionGameLabel(session);
   openModal(`
     <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="summaryTitle">
-      <div class="modal-header"><div><span class="eyebrow">Сессия завершена</span><h2 id="summaryTitle">Факт сохранён</h2><p>${escapeHTML(game?.title || "Игра")} · ${formatDuration(session.actualMinutes)}</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
+      <div class="modal-header"><div><span class="eyebrow">Сессия завершена</span><h2 id="summaryTitle">Факт сохранён</h2><p>${escapeHTML(gameLabel)} · ${formatDuration(session.actualMinutes)}</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
       <div class="modal-body">
         <div class="mini-metrics">
           <div class="mini-metric"><strong>${session.plannedMinutes} мин</strong><span>план</span></div>
@@ -946,6 +1054,7 @@ function openSessionSummary(session, cooldownTriggered) {
         </div>
         <div class="notice ${session.onTime ? "" : "warning"}"><span>${session.onTime ? "✓" : "◷"}</span><div><strong>${session.onTime ? "Остановились в границах плана" : `Перерасход: ${session.overtimeMinutes} мин`}</strong><br>Это наблюдение, а не оценка.</div></div>
         ${cooldownTriggered ? `<div class="notice warning"><span>◇</span><div><strong>Включена мягкая пауза на 48 часов</strong><br>Библиотека будет визуально приглушена. Паузу можно снять вручную.</div></div>` : ""}
+        <div class="field"><span class="field-label">Время по играм</span>${renderSessionGameBreakdown(session)}</div>
         <div class="session-fact"><div class="fact-icon">→</div><div><strong>${escapeHTML(session.afterAction || "Следующее действие не указано")}</strong><span>${session.afterActionConfirmed ? "подтверждено на выходе" : "не подтверждено"}</span></div></div>
       </div>
       <div class="modal-footer"><button class="button primary" data-close-modal>Готово</button></div>
@@ -1034,7 +1143,7 @@ function saveGame(form) {
 function confirmDeleteGame(id) {
   const game = gameById(id);
   if (!game) return;
-  if (state.activeSession?.gameId === id) {
+  if (state.activeSession && (activeGameId(state.activeSession) === id || getSessionGameIds(state.activeSession).includes(id))) {
     toast("Игра сейчас активна", "Сначала завершите текущую сессию.");
     return;
   }
@@ -1146,12 +1255,13 @@ function releaseCooldown(form) {
 function openSessionDetails(id) {
   const session = state.sessions.find((item) => item.id === id);
   if (!session) return;
-  const game = gameById(session.gameId);
+  const gameLabel = sessionGameLabel(session);
   openModal(`
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="detailsTitle">
-      <div class="modal-header"><div><span class="eyebrow">${formatDateTime(session.startedAt)}</span><h2 id="detailsTitle">${escapeHTML(game?.title || "Удалённая игра")}</h2><p>${formatClock(session.startedAt)} — ${formatClock(session.endedAt)}</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
+      <div class="modal-header"><div><span class="eyebrow">${formatDateTime(session.startedAt)}</span><h2 id="detailsTitle">${escapeHTML(gameLabel)}</h2><p>${formatClock(session.startedAt)} — ${formatClock(session.endedAt)}</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
       <div class="modal-body">
         <div class="mini-metrics"><div class="mini-metric"><strong>${session.plannedMinutes} мин</strong><span>план</span></div><div class="mini-metric"><strong class="${session.onTime ? "text-success" : "text-danger"}">${session.actualMinutes} мин</strong><span>факт</span></div></div>
+        <div class="field"><span class="field-label">Время по играм</span>${renderSessionGameBreakdown(session)}</div>
         <div class="form-grid">
           <div class="session-fact"><div class="fact-icon">${session.preState}</div><div><strong>Состояние до</strong><span>${motiveLabels(session)}</span></div></div>
           <div class="session-fact"><div class="fact-icon">${session.satisfaction}</div><div><strong>Удовлетворение</strong><span>из 5</span></div></div>
@@ -1172,16 +1282,28 @@ function openEditSessionModal(id) {
   const session = state.sessions.find((item) => item.id === id);
   if (!session) return;
   const selectedMotives = new Set(session.motives?.length ? session.motives : session.motive ? [session.motive] : []);
+  const breakdown = Object.fromEntries(getSessionGameBreakdown(session).map((item) => [item.gameId, item.minutes]));
+  const allocationIds = [...new Set([...Object.keys(breakdown), ...state.games.map((game) => game.id)])];
   openModal(`
     <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="editSessionTitle">
       <div class="modal-header"><div><span class="eyebrow">Коррекция фактов</span><h2 id="editSessionTitle">Редактировать сессию</h2><p>После сохранения план, факт и статистика будут пересчитаны.</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
       <form id="editSessionForm" data-session-id="${escapeAttr(session.id)}">
         <div class="modal-body">
           <div class="form-grid">
-            <div class="field"><label for="editSessionGame">Игра</label><select class="select" id="editSessionGame" name="gameId" required>${state.games.map((game) => `<option value="${escapeAttr(game.id)}" ${game.id === session.gameId ? "selected" : ""}>${escapeHTML(game.title)}</option>`).join("")}</select></div>
             <div class="field"><label for="editPlannedMinutes">План, минут</label><input class="input" id="editPlannedMinutes" name="plannedMinutes" type="number" min="1" max="1440" value="${session.plannedMinutes}" required></div>
-            <div class="field"><label for="editStartedAt">Начало</label><input class="input" id="editStartedAt" name="startedAt" type="datetime-local" value="${toDateTimeLocal(session.startedAt)}" required></div>
-            <div class="field"><label for="editEndedAt">Окончание</label><input class="input" id="editEndedAt" name="endedAt" type="datetime-local" value="${toDateTimeLocal(session.endedAt)}" required></div>
+            <div class="field"><label for="editStartedAt">Начало</label><input class="input" id="editStartedAt" name="startedAt" type="datetime-local" step="1" value="${toDateTimeLocal(session.startedAt)}" required></div>
+            <div class="field"><label for="editEndedAt">Окончание</label><input class="input" id="editEndedAt" name="endedAt" type="datetime-local" step="1" value="${toDateTimeLocal(session.endedAt)}" required></div>
+            <div class="field full">
+              <span class="field-label">Распределение времени по играм</span>
+              <small>Укажите относительное время. При сохранении сумма будет приведена к фактической длительности сессии.</small>
+              <div class="game-allocation-list">
+                ${allocationIds.map((gameId) => {
+                  const game = gameById(gameId);
+                  const minutes = breakdown[gameId] || 0;
+                  return `<label class="game-allocation-row"><span><strong>${escapeHTML(game?.title || "Удалённая игра")}</strong><small>минут в этой сессии</small></span><input class="input" type="number" min="0" max="1440" step="0.1" value="${minutes ? Math.round(minutes * 10) / 10 : 0}" data-game-allocation data-game-id="${escapeAttr(gameId)}" aria-label="Минуты: ${escapeAttr(game?.title || "Удалённая игра")}"></label>`;
+                }).join("")}
+              </div>
+            </div>
             <div class="field full"><label>Состояние до</label><div class="rating-control"><div class="range-field"><input type="range" name="preState" min="1" max="5" value="${session.preState}" data-range-output="editPreStateValue"><output class="range-value" id="editPreStateValue">${session.preState}</output></div>${renderRatingScale(["Очень плохо", "Плохо", "Нормально", "Хорошо", "Отлично"])}</div></div>
             <div class="field full"><span class="field-label">Почему хотелось играть?</span><div class="chip-group">${MOTIVES.map((item) => `<label class="choice-chip"><input type="checkbox" name="motives" value="${item.value}" ${selectedMotives.has(item.value) ? "checked" : ""}><span>${escapeHTML(item.label)}</span></label>`).join("")}</div></div>
             <div class="field full"><label for="editAfterAction">Что планировалось после?</label><input class="input" id="editAfterAction" name="afterAction" maxlength="120" value="${escapeAttr(session.afterAction)}"></div>
@@ -1205,15 +1327,35 @@ function updateSession(form) {
   const startedAt = new Date(String(data.get("startedAt")));
   const endedAt = new Date(String(data.get("endedAt")));
   const plannedMinutes = Number(data.get("plannedMinutes"));
-  if (!Number.isFinite(startedAt.getTime()) || !Number.isFinite(endedAt.getTime()) || !Number.isFinite(plannedMinutes) || plannedMinutes < 1 || plannedMinutes > 1440 || endedAt <= startedAt) {
-    toast("Проверьте время", "Окончание должно быть позже начала.");
+  const activeDurationMs = endedAt.getTime() - startedAt.getTime() - Math.max(0, Number(session.totalPausedMs || 0));
+  if (!Number.isFinite(startedAt.getTime()) || !Number.isFinite(endedAt.getTime()) || !Number.isFinite(plannedMinutes) || plannedMinutes < 1 || plannedMinutes > 1440 || endedAt <= startedAt || activeDurationMs <= 0) {
+    toast("Проверьте время", "Окончание должно быть позже начала с учётом сохранённых пауз.");
     return;
   }
+  const allocations = [...form.querySelectorAll("[data-game-allocation]")]
+    .map((input) => ({ gameId: input.dataset.gameId, weight: Math.max(0, Number(input.value || 0)) }))
+    .filter((item) => item.gameId && item.weight > 0);
+  const totalWeight = allocations.reduce((sum, item) => sum + item.weight, 0);
+  if (!allocations.length || totalWeight <= 0) {
+    toast("Укажите игры", "Хотя бы у одной игры должно быть время больше нуля.");
+    return;
+  }
+  let allocatedMs = 0;
+  let cursor = startedAt.getTime();
+  const gameSegments = allocations.map((item, index) => {
+    const durationMs = index === allocations.length - 1 ? activeDurationMs - allocatedMs : activeDurationMs * item.weight / totalWeight;
+    const segmentStartedAt = new Date(cursor).toISOString();
+    cursor += durationMs;
+    allocatedMs += durationMs;
+    return { id: createId("game-segment"), gameId: item.gameId, startedAt: segmentStartedAt, endedAt: new Date(cursor).toISOString(), durationMs };
+  });
   const motives = data.getAll("motives").map(String);
   const metrics = calculateSessionMetrics(startedAt.toISOString(), endedAt.toISOString(), plannedMinutes, session.totalPausedMs || 0);
   const updated = {
     ...session,
-    gameId: String(data.get("gameId")),
+    gameId: allocations[0].gameId,
+    currentGameId: allocations.at(-1).gameId,
+    gameSegments,
     startedAt: startedAt.toISOString(),
     endedAt: endedAt.toISOString(),
     plannedMinutes,
@@ -1234,7 +1376,7 @@ function updateSession(form) {
   saveState();
   closeModal();
   render();
-  toast("Сессия обновлена", "План, факт и статистика пересчитаны.");
+  toast("Сессия обновлена", "План, факт и время по играм пересчитаны.");
 }
 
 function confirmDeleteSession(id) {
@@ -1242,7 +1384,7 @@ function confirmDeleteSession(id) {
   if (!session) return;
   openConfirm({
     title: "Удалить сессию?",
-    body: `${gameById(session.gameId)?.title || "Игра"} · ${formatDateTime(session.startedAt)}. Это действие нельзя отменить без JSON-копии.`,
+    body: `${sessionGameLabel(session)} · ${formatDateTime(session.startedAt)}. Это действие нельзя отменить без JSON-копии.`,
     confirmLabel: "Удалить сессию",
     danger: true,
     onConfirm: () => {
@@ -1370,6 +1512,7 @@ function eventLabel(type) {
     extension: "продление",
     "session-paused": "пауза",
     "session-resumed": "продолжение после паузы",
+    "game-switched": "смена игры",
     "session-warning": "предупреждение о конце",
     "cooldown-started": "cooldown включён",
     "cooldown-released": "cooldown снят",
@@ -1393,7 +1536,7 @@ function buildDetailedTextReport(period) {
   const games = {};
   sessions.forEach((session) => {
     (session.motives || (session.motive ? [session.motive] : [])).forEach((motive) => { motives[motive] = (motives[motive] || 0) + 1; });
-    games[session.gameId] = (games[session.gameId] || 0) + Number(session.actualMinutes || 0);
+    accumulateSessionGameMinutes(games, session);
   });
   const drift = totalActual - totalPlanned;
   const lines = [
@@ -1420,14 +1563,15 @@ function buildDetailedTextReport(period) {
     ...(Object.keys(motives).length ? Object.entries(motives).sort((a, b) => b[1] - a[1]).map(([motive, count]) => `${motiveLabel(motive)}: ${count}`) : ["Не указаны"]),
     "",
     "ВРЕМЯ ПО ИГРАМ",
-    ...(Object.keys(games).length ? Object.entries(games).sort((a, b) => b[1] - a[1]).map(([gameId, minutes]) => `${gameById(gameId)?.title || "Удалённая игра"}: ${formatDuration(minutes)}`) : ["Нет завершённых сессий"]),
+    ...(Object.keys(games).length ? Object.entries(games).sort((a, b) => b[1] - a[1]).map(([gameId, minutes]) => `${gameById(gameId)?.title || "Удалённая игра"}: ${formatGameDuration(minutes)}`) : ["Нет завершённых сессий"]),
     "",
     "СЕССИИ"
   ];
 
   if (!sessions.length) lines.push("Нет завершённых сессий за выбранный период.");
   sessions.forEach((session, index) => {
-    const game = gameById(session.gameId)?.title || "Удалённая игра";
+    const game = sessionGameLabel(session);
+    const gameTimes = getSessionGameBreakdown(session).map(({ gameId, minutes }) => `${gameById(gameId)?.title || "Удалённая игра"}: ${formatGameDuration(minutes)}`).join("; ");
     const sessionMotives = session.motives || (session.motive ? [session.motive] : []);
     const checklist = Object.entries(session.checklistResults || {}).map(([id, passed]) => `${state.checklist.find((item) => item.id === id)?.title || id}: ${passed ? "да" : "нет"}`);
     lines.push(
@@ -1435,6 +1579,7 @@ function buildDetailedTextReport(period) {
       `${index + 1}. ${game}`,
       `Начало: ${formatReportDateTime(session.startedAt)}`,
       `Окончание: ${formatReportDateTime(session.endedAt)}`,
+      `Игры: ${gameTimes || "не указаны"}`,
       `План: ${formatDuration(session.plannedMinutes)} · факт: ${formatDuration(session.actualMinutes)} · перерасход: ${formatDuration(session.overtimeMinutes)}`,
       `Остановился вовремя: ${session.onTime ? "да" : "нет"}`,
       `Состояние до: ${session.preState}/5`,
@@ -1484,10 +1629,10 @@ function buildCurrentWeekReport() {
     return date >= start && date < end;
   });
   const byGame = {};
-  sessions.forEach((session) => { byGame[session.gameId] = (byGame[session.gameId] || 0) + Number(session.actualMinutes || 0); });
+  sessions.forEach((session) => { accumulateSessionGameMinutes(byGame, session); });
   const games = Object.entries(byGame).sort((a, b) => b[1] - a[1]).map(([gameId, minutes]) => ({ title: gameById(gameId)?.title || "Удалённая игра", minutes }));
   const range = formatWeekRange(week.start, week.end);
-  const text = [`Safe Play · ${range}`, `Игровое время: ${formatDuration(week.minutes)}`, `Сессий: ${week.sessions}`, `Вовремя: ${week.onTimePercent}%`, ...games.map((game) => `${game.title}: ${formatDuration(game.minutes)}`)].join("\n");
+  const text = [`Safe Play · ${range}`, `Игровое время: ${formatDuration(week.minutes)}`, `Сессий: ${week.sessions}`, `Вовремя: ${week.onTimePercent}%`, ...games.map((game) => `${game.title}: ${formatGameDuration(game.minutes)}`)].join("\n");
   return { ...week, games, range, text, filename: `safe-play-week-${week.key}.png` };
 }
 
@@ -1528,7 +1673,7 @@ async function createWeeklyReportBlob(report) {
     context.fillText(title, 570, y);
     context.fillStyle = "#c9f27b";
     context.font = "700 30px system-ui, sans-serif";
-    context.fillText(formatDuration(game.minutes), 570, y + 38);
+    context.fillText(formatGameDuration(game.minutes), 570, y + 38);
   });
   if (!report.games.length) {
     context.fillStyle = "#8a9381";
@@ -1673,6 +1818,22 @@ function updatePlanPreview() {
   preview.textContent = formatClock(new Date(Date.now() + Number(select.value) * 60_000));
 }
 
+function sessionGameNames(session) {
+  const names = getSessionGameIds(session).map((gameId) => gameById(gameId)?.title || "Удалённая игра");
+  return names.length ? names : ["Игра"];
+}
+
+function sessionGameLabel(session) {
+  const names = sessionGameNames(session);
+  return names.length === 1 ? names[0] : `${names.length} ${plural(names.length, ["игра", "игры", "игр"])} · ${names.join(", ")}`;
+}
+
+function accumulateSessionGameMinutes(target, session) {
+  getSessionGameBreakdown(session).forEach(({ gameId, minutes }) => {
+    target[gameId] = (target[gameId] || 0) + minutes;
+  });
+}
+
 function gameById(id) {
   return state.games.find((game) => game.id === id);
 }
@@ -1717,10 +1878,15 @@ function motiveLabels(session) {
   return escapeHTML(motives.length ? motives.map(motiveLabel).join(", ") : "Причины не указаны");
 }
 
+function formatGameDuration(minutes) {
+  const value = Math.max(0, Number(minutes) || 0);
+  return value > 0 && value < 1 ? "<1 мин" : formatDuration(value);
+}
+
 function toDateTimeLocal(value) {
   const date = new Date(value);
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
+  return local.toISOString().slice(0, 19);
 }
 
 function formatReleaseDate(value) {
@@ -1861,6 +2027,7 @@ document.addEventListener("click", (event) => {
     "delete-game": () => confirmDeleteGame(id),
     "open-finish": openFinishModal,
     "open-extension": openExtensionModal,
+    "open-game-switch": openGameSwitchModal,
     "toggle-session-pause": toggleSessionPause,
     "session-details": () => openSessionDetails(id),
     "edit-session": () => openEditSessionModal(id),
@@ -1893,6 +2060,7 @@ document.addEventListener("submit", (event) => {
   }
   if (form.id === "finishForm") finishSession(form);
   if (form.id === "extensionForm") extendSession(form);
+  if (form.id === "switchGameForm") switchActiveGame(form);
   if (form.id === "gameForm") saveGame(form);
   if (form.id === "checkForm") saveCheck(form);
   if (form.id === "releaseCooldownForm") releaseCooldown(form);
