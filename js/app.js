@@ -28,7 +28,7 @@ import {
   shouldTriggerSessionWarning,
   startOfWeek,
   summarizeStats
-} from "./core.js?v=2.2.1";
+} from "./core.js?v=2.3.0";
 
 const app = document.querySelector("#app");
 const modalRoot = document.querySelector("#modalRoot");
