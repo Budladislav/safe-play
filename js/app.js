@@ -5,6 +5,7 @@ import {
   MOTIVES,
   GAME_COLORS,
   SESSION_WARNING_LEADS,
+  SESSION_MODES,
   LEGACY_STORAGE_KEY,
   buildHeatmapMonths,
   calculateSessionMetrics,
@@ -16,6 +17,7 @@ import {
   formatDuration,
   formatTimer,
   getAccumulatedPausedMs,
+  getGameActivity,
   getGameTotals,
   getSessionGameBreakdown,
   getSessionGameIds,
@@ -29,14 +31,23 @@ import {
   startOfWeek,
   summarizeStats
 } from "./core.js?v=2.3.0";
+import {
+  clearCovers,
+  deleteCover,
+  getAllCovers,
+  processCoverFile,
+  replaceCovers,
+  saveCover
+} from "./covers.js?v=2.3.0";
 
 const app = document.querySelector("#app");
 const modalRoot = document.querySelector("#modalRoot");
 const toastStack = document.querySelector("#toastStack");
 const importInput = document.querySelector("#importInput");
-const validViews = ["home", "library", "history", "stats", "settings"];
+const validViews = ["home", "library", "archive", "game", "history", "stats", "settings"];
 
 let state = loadState();
+let selectedGameId = "";
 let currentView = getViewFromHash();
 let timerInterval = null;
 let deferredInstallPrompt = null;
@@ -46,6 +57,12 @@ let gameSaveReturn = null;
 let warningAudioContext = null;
 let showAllWeeks = false;
 let showAllHeatmapMonths = false;
+let showAllGameHeatmapMonths = false;
+let gameSortKey = "last-session";
+let gameSortDirection = "desc";
+let gameCovers = new Map();
+let pendingGameCover = null;
+let pendingGameCoverRemoved = false;
 
 function loadState() {
   try {
@@ -68,13 +85,27 @@ function saveState() {
 
 function getViewFromHash() {
   const candidate = window.location.hash.replace("#", "");
+  if (candidate.startsWith("game/")) {
+    selectedGameId = decodeURIComponent(candidate.slice(5));
+    return "game";
+  }
   return validViews.includes(candidate) ? candidate : "home";
 }
 
 function navigate(view) {
-  if (!validViews.includes(view)) return;
+  if (!validViews.includes(view) || view === "game") return;
   currentView = view;
-  if (window.location.hash !== `#${view}`) history.replaceState(null, "", `#${view}`);
+  if (window.location.hash !== `#${view}
+
+function navigateToGame(id) {
+  if (!gameById(id)) return;
+  selectedGameId = String(id);
+  currentView = "game";
+  const hash = "#game/" + encodeURIComponent(selectedGameId);
+  if (window.location.hash !== hash) history.pushState(null, "", hash);
+  render();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}`) history.replaceState(null, "", `#${view}`);
   render();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -82,13 +113,16 @@ function navigate(view) {
 function render() {
   clearInterval(timerInterval);
   timerInterval = null;
+  const navView = currentView === "archive" || currentView === "game" ? "library" : currentView;
   document.querySelectorAll("[data-view-link]").forEach((item) => {
-    item.classList.toggle("active", item.dataset.viewLink === currentView);
+    item.classList.toggle("active", item.dataset.viewLink === navView);
   });
 
   const renderers = {
     home: renderHome,
     library: renderLibrary,
+    archive: renderArchive,
+    game: renderGameDetails,
     history: renderHistory,
     stats: renderStats,
     settings: renderSettings
@@ -109,6 +143,7 @@ function renderHome() {
   if (state.activeSession) return renderActiveSession();
 
   const stats = summarizeStats(state);
+  const playableGames = activeGames();
   const cooldown = isCooldownActive(state.cooldown);
   const lastSession = [...state.sessions].sort((a, b) => new Date(b.endedAt) - new Date(a.endedAt))[0];
   const lastGameLabel = lastSession ? sessionGameLabel(lastSession) : "";
@@ -133,10 +168,11 @@ function renderHome() {
             <p>Проверь базовые вещи, назови своё состояние и зафиксируй время окончания. Это займёт около минуты.</p>
           </div>
           <div class="hero-actions">
-            <button class="button primary" data-action="open-entry" ${!state.games.length ? "data-needs-game='true'" : ""}>
+            <button class="button primary" data-action="open-entry" ${!playableGames.length ? "data-needs-game='true'" : ""}>
               ${icon("play")}
-              ${state.games.length ? "Подготовить сессию" : "Сначала добавить игру"}
+              ${playableGames.length ? "Подготовить сессию" : "Сначала добавить активную игру"}
             </button>
+            <button class="button" data-action="open-duo" ${!playableGames.length ? "disabled" : ""}>Ⅱ Игра с друзьями</button>
             <span class="hero-hint">Никаких очков и серий — только план и факты.</span>
           </div>
         </article>
@@ -203,6 +239,7 @@ function renderActiveSession() {
   const currentGame = gameById(activeGameId(session));
   const timer = getTimerState(session);
   const extensionsLeft = Math.max(0, state.settings.extensionLimit - session.extensions.length);
+  const canSwitchGame = activeGames().some((game) => game.id !== activeGameId(session));
   lastTimerWasOvertime = timer.isOvertime;
 
   return `
@@ -214,7 +251,7 @@ function renderActiveSession() {
           <p>Общий план сессии сохраняется при переключении между играми.</p>
         </div>
         <div class="header-actions">
-          <button class="button" data-action="open-game-switch" ${state.games.length < 2 ? "disabled" : ""}>Сменить игру</button>
+          <button class="button" data-action="open-game-switch" ${canSwitchGame ? "" : "disabled"}>Сменить игру</button>
           <button class="button danger" data-action="open-finish">Завершить сессию</button>
         </div>
       </div>
@@ -250,7 +287,7 @@ function renderActiveSession() {
           <article class="card compact">
             <div class="card-header">
               <div><h3>Игры в сессии</h3><p>Время считается отдельно, граница остаётся общей.</p></div>
-              <button class="button small" data-action="open-game-switch" ${state.games.length < 2 ? "disabled" : ""}>Сменить</button>
+              <button class="button small" data-action="open-game-switch" ${canSwitchGame ? "" : "disabled"}>Сменить</button>
             </div>
             <div id="activeGameBreakdown">${renderSessionGameBreakdown(session, true)}</div>
           </article>
@@ -326,12 +363,13 @@ function tickTimer() {
 function renderLibrary() {
   const totals = getGameTotals(state);
   const cooldown = isCooldownActive(state.cooldown);
+  const games = sortGames(activeGames());
   return `
     <section class="view">
       <div class="view-header">
         <div>
           <span class="eyebrow">Библиотека</span>
-          <h1>Ваши игры</h1>
+          <h1>Активные игры</h1>
         </div>
         <div class="header-actions">
           ${cooldown ? `<button class="button" data-action="release-cooldown">Снять мягкую паузу</button>` : ""}
@@ -339,18 +377,20 @@ function renderLibrary() {
         </div>
       </div>
 
+      ${renderLibraryTabs("library")}
+      ${renderGameSortControls()}
       ${cooldown ? `<div class="notice warning" style="margin-bottom:18px"><span>◈</span><div><strong>Библиотека приглушена</strong><br>Это визуальная пауза, а не запрет. Её можно снять явным действием.</div></div>` : ""}
 
-      ${state.games.length ? `
+      ${games.length ? `
         <div class="game-grid">
-          ${state.games.map((game) => renderGameCard(game, totals[game.id], cooldown)).join("")}
+          ${games.map((game) => renderGameCard(game, totals[game.id], cooldown)).join("")}
         </div>
       ` : `
         <div class="empty-state">
           <div>
             <div class="empty-icon">＋</div>
-            <h2>Добавьте первую игру</h2>
-            <p>Достаточно названия. Обложки и игровые достижения здесь намеренно не нужны.</p>
+            <h2>${state.games.length ? "Все игры сейчас в архиве" : "Добавьте первую игру"}</h2>
+            <p>${state.games.length ? "Верните нужную игру из архива, и она снова появится при выборе сессии." : "Название — единственное обязательное поле. Остальные сведения можно добавить позже."}</p>
             <button class="button primary" data-action="add-game">Добавить игру</button>
           </div>
         </div>
@@ -359,25 +399,169 @@ function renderLibrary() {
   `;
 }
 
+function renderArchive() {
+  const totals = getGameTotals(state);
+  const games = sortGames(state.games.filter((game) => game.archivedAt));
+  const completed = games.filter((game) => game.completedAt);
+  const unfinished = games.filter((game) => !game.completedAt);
+  return `
+    <section class="view">
+      <div class="view-header">
+        <div><span class="eyebrow">Библиотека</span><h1>Архив игр</h1><p>История и статистика сохраняются, но эти игры не предлагаются при старте сессии.</p></div>
+      </div>
+      ${renderLibraryTabs("archive")}
+      ${renderGameSortControls()}
+      ${games.length ? `
+        <div class="archive-groups">
+          <section class="archive-group">
+            <div class="section-heading"><div><span class="eyebrow">Не пройдены</span><h2>${unfinished.length} ${plural(unfinished.length, ["игра", "игры", "игр"])}</h2></div></div>
+            ${unfinished.length ? `<div class="game-grid">${unfinished.map((game) => renderGameCard(game, totals[game.id])).join("")}</div>` : `<div class="archive-empty">Все архивные игры в этой группе пройдены.</div>`}
+          </section>
+          <section class="archive-group">
+            <div class="section-heading"><div><span class="eyebrow">Пройдены</span><h2>${completed.length} ${plural(completed.length, ["игра", "игры", "игр"])}</h2></div></div>
+            ${completed.length ? `<div class="game-grid">${completed.map((game) => renderGameCard(game, totals[game.id])).join("")}</div>` : `<div class="archive-empty">Пройденных игр в архиве пока нет.</div>`}
+          </section>
+        </div>
+      ` : `
+        <div class="empty-state"><div><div class="empty-icon">◇</div><h2>Архив пока пуст</h2><p>Перемещённые сюда игры сохранят всё игровое время и историю сессий.</p><button class="button" data-view-link="library">Открыть активные</button></div></div>
+      `}
+    </section>
+  `;
+}
+
+function renderLibraryTabs(activeTab) {
+  const activeCount = activeGames().length;
+  const archiveCount = state.games.length - activeCount;
+  return `<div class="library-tabs" role="tablist" aria-label="Разделы библиотеки">
+    <button class="library-tab ${activeTab === "library" ? "active" : ""}" data-view-link="library" role="tab" aria-selected="${activeTab === "library"}">Активные <span>${activeCount}</span></button>
+    <button class="library-tab ${activeTab === "archive" ? "active" : ""}" data-view-link="archive" role="tab" aria-selected="${activeTab === "archive"}">Архив <span>${archiveCount}</span></button>
+  </div>`;
+}
+
+function renderGameSortControls() {
+  return `<div class="library-toolbar">
+    <label class="sort-field" for="gameSort"><span>Сортировка</span><select class="select" id="gameSort" data-library-sort>
+      <option value="release-year" ${gameSortKey === "release-year" ? "selected" : ""}>По году выпуска</option>
+      <option value="completed" ${gameSortKey === "completed" ? "selected" : ""}>По прохождению</option>
+      <option value="first-session" ${gameSortKey === "first-session" ? "selected" : ""}>По первой сессии</option>
+      <option value="last-session" ${gameSortKey === "last-session" ? "selected" : ""}>По последней сессии</option>
+    </select></label>
+    <button class="button small sort-direction" data-action="toggle-game-sort" title="Изменить направление">${gameSortDirection === "desc" ? "↓ Сначала новые" : "↑ Сначала старые"}</button>
+  </div>`;
+}
+
+function sortGames(games) {
+  const activity = new Map(games.map((game) => [game.id, getGameActivity(state, game.id)]));
+  const direction = gameSortDirection === "desc" ? -1 : 1;
+  const valueFor = (game) => {
+    const gameActivity = activity.get(game.id);
+    if (gameSortKey === "release-year") return game.releaseYear;
+    if (gameSortKey === "completed") return game.completedAt ? new Date(game.completedAt).getTime() : null;
+    if (gameSortKey === "first-session") return gameActivity.firstSessionAt ? new Date(gameActivity.firstSessionAt).getTime() : null;
+    return gameActivity.lastSessionAt ? new Date(gameActivity.lastSessionAt).getTime() : null;
+  };
+  return [...games].sort((first, second) => {
+    const firstValue = valueFor(first);
+    const secondValue = valueFor(second);
+    if (firstValue == null && secondValue != null) return 1;
+    if (firstValue != null && secondValue == null) return -1;
+    if (firstValue != null && secondValue != null && firstValue !== secondValue) return (firstValue - secondValue) * direction;
+    return first.title.localeCompare(second.title, "ru");
+  });
+}
+
 function renderGameCard(game, totals = { minutes: 0, sessions: 0 }, cooldown = false) {
+  const cover = coverForGame(game);
+  const meta = [game.releaseYear, ...(game.platforms || [])].filter(Boolean);
   return `
     <article class="game-card ${cooldown ? "cooldown" : ""}" style="--game-color:${escapeAttr(game.color)}">
       <div>
         <div class="game-card-header">
-          <div class="game-symbol">${escapeHTML(game.title.slice(0, 1))}</div>
+          <button class="game-cover-button" data-action="open-game-details" data-id="${escapeAttr(game.id)}" aria-label="Открыть ${escapeAttr(game.title)}">
+            ${cover ? `<img class="game-cover-image" src="${escapeAttr(cover.dataUrl)}" alt="Обложка ${escapeAttr(game.title)}">` : `<span class="game-symbol">${escapeHTML(game.title.slice(0, 1))}</span>`}
+          </button>
           <div class="game-menu">
             <button class="icon-button" data-action="edit-game" data-id="${escapeAttr(game.id)}" title="Редактировать">${icon("edit")}</button>
             <button class="icon-button" data-action="delete-game" data-id="${escapeAttr(game.id)}" title="Удалить">${icon("trash")}</button>
           </div>
         </div>
-        <h3>${escapeHTML(game.title)}</h3>
-        <p>${totals.sessions} ${plural(totals.sessions, ["сессия", "сессии", "сессий"])}</p>
+        <button class="game-card-title" data-action="open-game-details" data-id="${escapeAttr(game.id)}"><h3>${escapeHTML(game.title)}</h3></button>
+        <div class="game-card-badges">
+          ${game.completedAt ? `<span class="status-pill info">пройдена</span>` : ""}
+          ${game.archivedAt ? `<span class="status-pill">архив</span>` : ""}
+        </div>
+        <p>${meta.length ? escapeHTML(meta.join(" · ")) + " · " : ""}${totals.sessions} ${plural(totals.sessions, ["сессия", "сессии", "сессий"])}</p>
       </div>
       <div class="game-card-footer">
         <div class="game-time"><strong>${formatGameDuration(totals.minutes)}</strong><span>всего в игре</span></div>
-        ${cooldown ? `<span class="lock-chip">◇ пауза</span>` : `<button class="button small" data-action="open-entry" data-game-id="${escapeAttr(game.id)}">Играть</button>`}
+        ${game.archivedAt
+          ? `<button class="button small" data-action="open-game-details" data-id="${escapeAttr(game.id)}">Открыть</button>`
+          : cooldown
+            ? `<span class="lock-chip">◇ пауза</span>`
+            : `<button class="button small" data-action="open-entry" data-game-id="${escapeAttr(game.id)}">Играть</button>`}
       </div>
     </article>
+  `;
+}
+
+function renderGameDetails() {
+  const game = gameById(selectedGameId);
+  if (!game) return renderLibrary();
+  const activity = getGameActivity(state, game.id);
+  const recentMonths = buildHeatmapMonths(activity.byDay, 3);
+  const historyMonths = buildHeatmapMonths(activity.byDay, 3, new Date(), true);
+  const recentKeys = new Set(recentMonths.map((month) => month.key));
+  const canExpand = historyMonths.some((month) => !recentKeys.has(month.key));
+  const expanded = showAllGameHeatmapMonths && canExpand;
+  const months = expanded ? historyMonths : recentMonths;
+  const cover = coverForGame(game);
+  const relatedSessions = [...activity.sessions].reverse();
+  return `
+    <section class="view">
+      <div class="game-detail-nav"><button class="button ghost small" data-view-link="${game.archivedAt ? "archive" : "library"}">← Назад в ${game.archivedAt ? "архив" : "библиотеку"}</button></div>
+      <article class="card game-detail-hero" style="--game-color:${escapeAttr(game.color)}">
+        <div class="game-detail-cover">
+          ${cover ? `<img src="${escapeAttr(cover.dataUrl)}" alt="Обложка ${escapeAttr(game.title)}">` : `<span>${escapeHTML(game.title.slice(0, 1))}</span>`}
+        </div>
+        <div class="game-detail-copy">
+          <div class="game-card-badges">${game.completedAt ? `<span class="status-pill info">пройдена</span>` : `<span class="status-pill">не пройдена</span>`}${game.archivedAt ? `<span class="status-pill required">в архиве</span>` : `<span class="status-pill info">активна</span>`}</div>
+          <h1>${escapeHTML(game.title)}</h1>
+          <p>${[game.releaseYear ? `${game.releaseYear} год` : "", ...(game.platforms || [])].filter(Boolean).map(escapeHTML).join(" · ") || "Год и устройство пока не указаны"}</p>
+          <div class="button-row">
+            ${game.archivedAt ? "" : `<button class="button primary" data-action="open-entry" data-game-id="${escapeAttr(game.id)}">Играть</button>`}
+            <button class="button" data-action="toggle-game-completed" data-id="${escapeAttr(game.id)}">${game.completedAt ? "Снять отметку «пройдена»" : "Отметить пройденной"}</button>
+            <button class="button" data-action="toggle-game-archive" data-id="${escapeAttr(game.id)}">${game.archivedAt ? "Вернуть из архива" : "Добавить в архив"}</button>
+            <button class="button" data-action="edit-game" data-id="${escapeAttr(game.id)}">${icon("edit")} Редактировать</button>
+          </div>
+        </div>
+      </article>
+
+      <div class="grid four game-detail-metrics">
+        <article class="card"><div class="metric"><span class="metric-value">${formatGameDuration(activity.totalMinutes)}</span><span class="metric-label">всего в игре</span></div></article>
+        <article class="card"><div class="metric"><span class="metric-value">${activity.sessionCount}</span><span class="metric-label">${plural(activity.sessionCount, ["сессия", "сессии", "сессий"])}</span></div></article>
+        <article class="card"><div class="metric"><span class="metric-value">${activity.days.length}</span><span class="metric-label">${plural(activity.days.length, ["игровой день", "игровых дня", "игровых дней"])}</span></div></article>
+        <article class="card"><div class="metric"><span class="metric-value">${activity.lastSessionAt ? formatReportDate(activity.lastSessionAt) : "—"}</span><span class="metric-label">последняя сессия</span></div></article>
+      </div>
+
+      <div class="grid two game-detail-grid">
+        <article class="card">
+          <div class="card-header"><div><h2>${expanded ? "Вся история игры" : "Последние 3 месяца"}</h2><p>Тепловая карта только этой игры</p></div>${canExpand ? `<button class="button small" data-action="toggle-game-heatmap">${expanded ? "Показать 3 месяца" : "Показать всю историю"}</button>` : ""}</div>
+          <div class="heatmap-wrap"><div class="heatmap-months">${months.map((month) => `<section class="heatmap-month"><h3>${formatMonthLabel(month.start)}</h3><div class="heatmap-weekdays"><span>пн</span><span>вт</span><span>ср</span><span>чт</span><span>пт</span><span>сб</span><span>вс</span></div><div class="heatmap-month-grid">${month.days.map((day) => day ? `<span class="heat-cell" data-level="${day.level}" title="${formatReportDate(day.date)}: ${formatGameDuration(day.minutes)}"></span>` : `<span class="heat-cell empty" aria-hidden="true"></span>`).join("")}</div></section>`).join("")}</div></div>
+        </article>
+        <article class="card">
+          <div class="card-header"><div><h2>Дни и время</h2><p>${activity.days.length ? `От ${formatReportDate(activity.days.at(-1).date)} до ${formatReportDate(activity.days[0].date)}` : "Сессий пока не было"}</p></div></div>
+          ${activity.days.length ? `<div class="game-days-list">${activity.days.map((day) => `<div class="game-day-row"><span>${formatReportDate(day.date)}</span><strong>${formatGameDuration(day.minutes)}</strong></div>`).join("")}</div>` : `<p class="muted-text">После первой завершённой сессии здесь появится дневная статистика.</p>`}
+        </article>
+      </div>
+
+      <article class="card">
+        <div class="card-header"><div><h2>Связанные сессии</h2><p>Время ниже относится только к «${escapeHTML(game.title)}».</p></div></div>
+        ${relatedSessions.length ? `<div class="history-list">${relatedSessions.map((session) => {
+          const minutes = getSessionGameBreakdown(session).find((item) => item.gameId === game.id)?.minutes || 0;
+          return `<button class="history-item compact-history" data-action="session-details" data-id="${escapeAttr(session.id)}"><div class="history-main"><strong>${formatReportDate(session.startedAt)}</strong><span>${formatClock(session.startedAt)} · ${session.mode === SESSION_MODES.DUO ? "с друзьями" : "обычная сессия"}</span></div><div class="history-stat"><strong>${formatGameDuration(minutes)}</strong><span>в этой игре</span></div><span class="status-pill ${session.mode === SESSION_MODES.DUO ? "" : session.onTime ? "info" : "required"}">${session.mode === SESSION_MODES.DUO ? "дуо" : session.onTime ? "вовремя" : `+${session.overtimeMinutes} мин`}</span></button>`;
+        }).join("")}</div>` : `<p class="muted-text">Связанных сессий пока нет.</p>`}
+      </article>
+    </section>
   `;
 }
 
@@ -655,10 +839,11 @@ function renderSettings() {
 }
 
 function openEntryModal(preselectedGameId = "") {
-  if (!state.games.length) {
+  const playableGames = activeGames();
+  if (!playableGames.length) {
     gameSaveReturn = "entry";
     openGameModal();
-    toast("Сначала одна игра", "Для планирования нужно название игры.");
+    toast("Нужна активная игра", "Добавьте новую игру или верните нужную из архива.");
     return;
   }
 
@@ -707,7 +892,7 @@ function openEntryModal(preselectedGameId = "") {
               <div class="field">
                 <label for="entryGame">Игра</label>
                 <select class="select" id="entryGame" name="gameId" required>
-                  ${state.games.map((game) => `<option value="${escapeAttr(game.id)}" ${game.id === preselectedGameId ? "selected" : ""}>${escapeHTML(game.title)}</option>`).join("")}
+                  ${playableGames.map((game) => `<option value="${escapeAttr(game.id)}" ${game.id === preselectedGameId ? "selected" : ""}>${escapeHTML(game.title)}</option>`).join("")}
                 </select>
               </div>
               <div class="field">
@@ -904,7 +1089,7 @@ function openGameSwitchModal() {
   const session = state.activeSession;
   if (!session) return;
   const currentId = activeGameId(session);
-  const alternatives = state.games.filter((game) => game.id !== currentId);
+  const alternatives = activeGames().filter((game) => game.id !== currentId);
   if (!alternatives.length) {
     toast("Нет другой игры", "Добавьте ещё одну игру в библиотеку, чтобы переключаться внутри сессии.");
     return;
@@ -1104,13 +1289,41 @@ function extendSession(form) {
 
 function openGameModal(game = null) {
   const color = game?.color || GAME_COLORS[state.games.length % GAME_COLORS.length];
+  const id = game?.id || createId("game");
+  const platformPresets = ["PS4", "PS5", "PC", "Nintendo Switch", "Xbox"];
+  const selectedPlatforms = new Set(game?.platforms || []);
+  const customPlatforms = [...selectedPlatforms].filter((platform) => !platformPresets.includes(platform)).join(", ");
+  const cover = coverForGame(game);
+  pendingGameCover = null;
+  pendingGameCoverRemoved = false;
   openModal(`
     <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="gameTitle">
-      <div class="modal-header"><div><span class="eyebrow">Библиотека</span><h2 id="gameTitle">${game ? "Изменить игру" : "Новая игра"}</h2><p>Только контекст для сессий.</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
-      <form id="gameForm" data-id="${escapeAttr(game?.id || "")}">
+      <div class="modal-header"><div><span class="eyebrow">Библиотека</span><h2 id="gameTitle">${game ? "Изменить игру" : "Новая игра"}</h2><p>Личный каталог и контекст игрового времени.</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
+      <form id="gameForm" data-id="${escapeAttr(id)}" data-existing="${Boolean(game)}">
         <div class="modal-body">
           <div class="field"><label for="gameName">Название</label><input class="input" id="gameName" name="title" value="${escapeAttr(game?.title || "")}" maxlength="100" required autofocus placeholder="Например: Elden Ring"></div>
+          <div class="form-grid">
+            <div class="field"><label for="gameReleaseYear">Год выпуска</label><input class="input" id="gameReleaseYear" name="releaseYear" type="number" min="1950" max="2100" inputmode="numeric" value="${escapeAttr(game?.releaseYear || "")}" placeholder="2024"></div>
+            <div class="field"><label for="gameCustomPlatforms">Другое устройство</label><input class="input" id="gameCustomPlatforms" name="customPlatforms" maxlength="160" value="${escapeAttr(customPlatforms)}" placeholder="Например: Steam Deck"></div>
+          </div>
+          <div class="field"><span class="field-label">Устройство</span><div class="chip-group">${platformPresets.map((platform) => `<label class="choice-chip"><input type="checkbox" name="platforms" value="${escapeAttr(platform)}" ${selectedPlatforms.has(platform) ? "checked" : ""}><span>${escapeHTML(platform)}</span></label>`).join("")}</div><small>Можно выбрать несколько вариантов и добавить своё через запятую.</small></div>
+          <div class="field">
+            <span class="field-label">Своя обложка</span>
+            <div class="cover-editor">
+              <div class="cover-editor-preview" id="gameCoverPreview">${cover ? `<img src="${escapeAttr(cover.dataUrl)}" alt="Текущая обложка">` : `<span style="--game-color:${escapeAttr(color)}">${escapeHTML((game?.title || "?").slice(0, 1))}</span>`}</div>
+              <div class="cover-editor-actions">
+                <label class="button small" for="gameCoverInput">Выбрать изображение</label>
+                <input class="visually-hidden" id="gameCoverInput" type="file" accept="image/*">
+                ${(cover || game?.coverId) ? `<button class="button ghost small" type="button" data-action="remove-game-cover">Удалить обложку</button>` : ""}
+                <small>Файл будет уменьшен и сохранён только на этом устройстве.</small>
+              </div>
+            </div>
+          </div>
           <div class="field"><span class="field-label">Цвет карточки</span><div class="chip-group">${GAME_COLORS.map((item) => `<label class="choice-chip"><input type="radio" name="color" value="${item}" ${item === color ? "checked" : ""}><span style="color:${item}">●</span></label>`).join("")}</div></div>
+          <div class="form-grid">
+            <label class="check-row"><input type="checkbox" name="completed" ${game?.completedAt ? "checked" : ""}><span><strong>Игра пройдена</strong><small>Не влияет на возможность играть снова</small></span></label>
+            <label class="check-row"><input type="checkbox" name="archived" ${game?.archivedAt ? "checked" : ""}><span><strong>Добавить в архив</strong><small>Скрыть из выбора сессии</small></span></label>
+          </div>
         </div>
         <div class="modal-footer"><button class="button ghost" type="button" data-close-modal>Отмена</button><button class="button primary" type="submit">Сохранить</button></div>
       </form>
@@ -1118,26 +1331,107 @@ function openGameModal(game = null) {
   `);
 }
 
-function saveGame(form) {
+async function saveGame(form) {
   const data = new FormData(form);
   const id = form.dataset.id;
+  const existing = state.games.find((item) => item.id === id);
+  const now = new Date().toISOString();
+  const wantsArchive = data.has("archived");
+  if (wantsArchive && !existing?.archivedAt && activeSessionUsesGame(id)) {
+    toast("Игра сейчас активна", "Завершите текущую сессию перед переносом игры в архив.");
+    return;
+  }
+  const customPlatforms = String(data.get("customPlatforms") || "").split(/[,;\n]/).map((value) => value.trim()).filter(Boolean);
+  const platforms = [...new Set([...data.getAll("platforms").map(String), ...customPlatforms])].slice(0, 8);
+  let coverId = existing?.coverId || null;
+  try {
+    if (pendingGameCoverRemoved && coverId) {
+      await deleteCover(coverId);
+      gameCovers.delete(coverId);
+      coverId = null;
+    }
+    if (pendingGameCover) {
+      const record = await saveCover({ id, ...pendingGameCover, updatedAt: now });
+      gameCovers.set(id, record);
+      coverId = id;
+    }
+  } catch (error) {
+    toast("Не удалось сохранить обложку", error.message);
+    return;
+  }
   const game = {
-    id: id || createId("game"),
+    ...existing,
+    id,
     title: String(data.get("title") || "").trim(),
     color: String(data.get("color") || GAME_COLORS[0]),
-    createdAt: id ? state.games.find((item) => item.id === id)?.createdAt : new Date().toISOString()
+    releaseYear: Number(data.get("releaseYear")) || null,
+    platforms,
+    archivedAt: wantsArchive ? existing?.archivedAt || now : null,
+    completedAt: data.has("completed") ? existing?.completedAt || now : null,
+    coverId,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now
   };
   if (!game.title) return;
-  if (id) state.games = state.games.map((item) => item.id === id ? game : item);
+  if (existing) state.games = state.games.map((item) => item.id === id ? game : item);
   else state.games.push(game);
   const returnTo = gameSaveReturn;
   saveState();
   closeModal();
   render();
-  toast(id ? "Игра обновлена" : "Игра добавлена", game.title);
-  if (returnTo === "entry") {
+  toast(existing ? "Игра обновлена" : "Игра добавлена", game.title);
+  if (returnTo === "entry" && !game.archivedAt) {
     openEntryModal(game.id);
   }
+}
+
+async function selectGameCover(file) {
+  if (!file) return;
+  const preview = document.querySelector("#gameCoverPreview");
+  try {
+    if (preview) preview.innerHTML = '<span class="cover-loading">Обработка…</span>';
+    pendingGameCover = await processCoverFile(file);
+    pendingGameCoverRemoved = false;
+    if (preview) preview.innerHTML = `<img src="${escapeAttr(pendingGameCover.dataUrl)}" alt="Новая обложка">`;
+  } catch (error) {
+    pendingGameCover = null;
+    toast("Не удалось обработать обложку", error.message);
+    if (preview) preview.innerHTML = '<span>?</span>';
+  }
+}
+
+function removePendingGameCover() {
+  pendingGameCover = null;
+  pendingGameCoverRemoved = true;
+  const preview = document.querySelector("#gameCoverPreview");
+  const title = document.querySelector("#gameName")?.value || "?";
+  if (preview) preview.innerHTML = `<span>${escapeHTML(title.slice(0, 1))}</span>`;
+}
+
+function toggleGameArchive(id) {
+  const game = gameById(id);
+  if (!game) return;
+  if (!game.archivedAt && activeSessionUsesGame(id)) {
+    toast("Игра сейчас активна", "Завершите текущую сессию перед переносом игры в архив.");
+    return;
+  }
+  const archivedAt = game.archivedAt ? null : new Date().toISOString();
+  state.games = state.games.map((item) => item.id === id ? { ...item, archivedAt, updatedAt: new Date().toISOString() } : item);
+  state.events.push({ id: createId("event"), type: archivedAt ? "game-archived" : "game-restored", at: new Date().toISOString(), gameId: id });
+  saveState();
+  render();
+  toast(archivedAt ? "Игра добавлена в архив" : "Игра снова активна", game.title);
+}
+
+function toggleGameCompleted(id) {
+  const game = gameById(id);
+  if (!game) return;
+  const completedAt = game.completedAt ? null : new Date().toISOString();
+  state.games = state.games.map((item) => item.id === id ? { ...item, completedAt, updatedAt: new Date().toISOString() } : item);
+  state.events.push({ id: createId("event"), type: completedAt ? "game-completed" : "game-reopened", at: new Date().toISOString(), gameId: id });
+  saveState();
+  render();
+  toast(completedAt ? "Игра отмечена пройденной" : "Отметка прохождения снята", game.title);
 }
 
 function confirmDeleteGame(id) {
@@ -1152,8 +1446,16 @@ function confirmDeleteGame(id) {
     body: "Завершённые сессии сохранятся в истории как записи удалённой игры.",
     confirmLabel: "Удалить игру",
     danger: true,
-    onConfirm: () => {
+    onConfirm: async () => {
       state.games = state.games.filter((item) => item.id !== id);
+      if (game.coverId) {
+        try {
+          await deleteCover(game.coverId);
+          gameCovers.delete(game.coverId);
+        } catch (error) {
+          console.info("Could not delete cover", error);
+        }
+      }
       saveState();
       closeModal();
       render();
@@ -1726,35 +2028,47 @@ async function shareWeekReport() {
     if (error.name !== "AbortError") toast("Не удалось поделиться", error.message);
   }
 }
-function exportData() {
-  const payload = { ...state, exportedAt: new Date().toISOString(), app: "Safe Play", appVersion: APP_VERSION };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `safe-play-backup-${new Date().toISOString().slice(0, 10)}.json`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-  toast("Экспорт готов", "JSON-копия сохранена в загрузки.");
+async function exportData() {
+  try {
+    const covers = await getAllCovers();
+    const payload = { ...state, assets: { covers }, exportedAt: new Date().toISOString(), app: "Safe Play", appVersion: APP_VERSION };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `safe-play-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    toast("Экспорт готов", `JSON-копия сохранена вместе с ${covers.length} ${plural(covers.length, ["обложкой", "обложками", "обложками"])}.`);
+  } catch (error) {
+    toast("Не удалось создать экспорт", error.message);
+  }
 }
 
 async function handleImport(file) {
   try {
     const parsed = JSON.parse(await file.text());
     const imported = normalizeState(parsed);
+    const importedCovers = Array.isArray(parsed.assets?.covers) ? parsed.assets.covers : Array.isArray(parsed.covers) ? parsed.covers : [];
     openConfirm({
       title: "Заменить локальные данные?",
-      body: `В файле: ${imported.games.length} игр и ${imported.sessions.length} сессий. Текущие данные будут заменены.`,
+      body: `В файле: ${imported.games.length} игр, ${imported.sessions.length} сессий и ${importedCovers.length} обложек. Текущие данные будут заменены.`,
       confirmLabel: "Импортировать",
       danger: true,
-      onConfirm: () => {
-        state = imported;
-        saveState();
-        closeModal();
-        navigate("home");
-        toast("Импорт завершён", "Все данные и настройки восстановлены.");
+      onConfirm: async () => {
+        try {
+          const covers = await replaceCovers(importedCovers);
+          gameCovers = new Map(covers.map((cover) => [cover.id, cover]));
+          state = imported;
+          saveState();
+          closeModal();
+          navigate("home");
+          toast("Импорт завершён", "Все данные, настройки и обложки восстановлены.");
+        } catch (error) {
+          toast("Импорт не завершён", error.message);
+        }
       }
     });
   } catch (error) {
@@ -1770,7 +2084,13 @@ function resetData() {
     body: "Это действие нельзя отменить без ранее сохранённого JSON-экспорта.",
     confirmLabel: "Удалить навсегда",
     danger: true,
-    onConfirm: () => {
+    onConfirm: async () => {
+      try {
+        await clearCovers();
+        gameCovers.clear();
+      } catch (error) {
+        console.info("Could not clear covers", error);
+      }
       state = createDefaultState();
       saveState();
       closeModal();
@@ -1800,6 +2120,8 @@ function closeModal() {
   modalRoot.innerHTML = "";
   document.body.style.overflow = "";
   gameSaveReturn = null;
+  pendingGameCover = null;
+  pendingGameCoverRemoved = false;
 }
 
 function updateEntryHint() {
@@ -1836,6 +2158,28 @@ function accumulateSessionGameMinutes(target, session) {
 
 function gameById(id) {
   return state.games.find((game) => game.id === id);
+}
+
+function activeGames() {
+  return state.games.filter((game) => !game.archivedAt);
+}
+
+function activeSessionUsesGame(id) {
+  return Boolean(state.activeSession && (activeGameId(state.activeSession) === id || getSessionGameIds(state.activeSession).includes(id)));
+}
+
+function coverForGame(game) {
+  return game?.coverId ? gameCovers.get(game.coverId) || null : null;
+}
+
+async function hydrateCoverStore() {
+  try {
+    const covers = await getAllCovers();
+    gameCovers = new Map(covers.map((cover) => [cover.id, cover]));
+    render();
+  } catch (error) {
+    console.info("Cover storage unavailable", error);
+  }
 }
 
 function getGreeting() {
@@ -2023,8 +2367,14 @@ document.addEventListener("click", (event) => {
   const actions = {
     "open-entry": () => openEntryModal(target.dataset.gameId || ""),
     "add-game": () => openGameModal(),
+    "open-game-details": () => navigateToGame(id),
     "edit-game": () => openGameModal(gameById(id)),
     "delete-game": () => confirmDeleteGame(id),
+    "toggle-game-archive": () => toggleGameArchive(id),
+    "toggle-game-completed": () => toggleGameCompleted(id),
+    "remove-game-cover": removePendingGameCover,
+    "toggle-game-sort": () => { gameSortDirection = gameSortDirection === "desc" ? "asc" : "desc"; render(); },
+    "toggle-game-heatmap": () => { showAllGameHeatmapMonths = !showAllGameHeatmapMonths; render(); },
     "open-finish": openFinishModal,
     "open-extension": openExtensionModal,
     "open-game-switch": openGameSwitchModal,
@@ -2061,7 +2411,7 @@ document.addEventListener("submit", (event) => {
   if (form.id === "finishForm") finishSession(form);
   if (form.id === "extensionForm") extendSession(form);
   if (form.id === "switchGameForm") switchActiveGame(form);
-  if (form.id === "gameForm") saveGame(form);
+  if (form.id === "gameForm") void saveGame(form);
   if (form.id === "checkForm") saveCheck(form);
   if (form.id === "releaseCooldownForm") releaseCooldown(form);
   if (form.id === "editSessionForm") updateSession(form);
@@ -2078,6 +2428,15 @@ document.addEventListener("input", (event) => {
 
 document.addEventListener("change", (event) => {
   const target = event.target;
+  if (target.matches("[data-library-sort]")) {
+    gameSortKey = target.value;
+    render();
+    return;
+  }
+  if (target.id === "gameCoverInput") {
+    void selectGameCover(target.files?.[0]);
+    return;
+  }
   if (target.id === "plannedMinutes") updatePlanPreview();
   if (target.id === "reportPeriodType") updateTextReportFields();
   if (target.dataset.setting === "extension-limit") state.settings.extensionLimit = Number(target.value);
@@ -2152,3 +2511,4 @@ if ("serviceWorker" in navigator) {
 
 updateConnectionStatus();
 render();
+void hydrateCoverStore();

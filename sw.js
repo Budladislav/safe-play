@@ -9,6 +9,7 @@ const ASSETS = [
   "./assets/icon-192.png",
   "./assets/icon-512.png",
   "./js/core.js?v=2.3.0",
+  "./js/covers.js?v=2.3.0",
   "./js/app.js?v=2.3.0"
 ];
 
