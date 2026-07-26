@@ -1,6 +1,6 @@
 export const STORAGE_KEY = "safe-play:v2";
 export const LEGACY_STORAGE_KEY = "gaming-guard:v2";
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 export const APP_VERSION = "2.3.0";
 export const APP_RELEASE_DATE = "2026-07-23";
 
@@ -15,6 +15,10 @@ export const MOTIVES = [
 
 export const GAME_COLORS = ["#c9f27b", "#8bc9ff", "#ffad7d", "#c9a8ff", "#7de2d1", "#f4d06f"];
 export const SESSION_WARNING_LEADS = [1, 3, 5, 10, 15];
+export const SESSION_MODES = {
+  GUARDED: "guarded",
+  DUO: "duo"
+};
 
 export function createId(prefix = "id") {
   const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -66,12 +70,7 @@ export function normalizeState(input) {
     ...defaults,
     ...input,
     version: SCHEMA_VERSION,
-    games: games.map((game, index) => ({
-      id: String(game.id || createId("game")),
-      title: String(game.title || "Без названия").slice(0, 100),
-      color: String(game.color || GAME_COLORS[index % GAME_COLORS.length]),
-      createdAt: validIso(game.createdAt) ? game.createdAt : new Date().toISOString()
-    })),
+    games: games.map((game, index) => normalizeGame(game, index)),
     checklist: checklist.map((item, index) => ({
       id: String(item.id || createId("check")),
       title: String(item.title || "Пункт чек-листа").slice(0, 180),
@@ -105,68 +104,104 @@ export function normalizeState(input) {
   return normalized;
 }
 
+function normalizeGame(game, index) {
+  const createdAt = validIso(game.createdAt) ? game.createdAt : new Date().toISOString();
+  const rawPlatforms = Array.isArray(game.platforms)
+    ? game.platforms
+    : game.platform || game.device
+      ? [game.platform || game.device]
+      : [];
+  const releaseYear = Number(game.releaseYear);
+  return {
+    id: String(game.id || createId("game")),
+    title: String(game.title || "Без названия").slice(0, 100),
+    color: String(game.color || GAME_COLORS[index % GAME_COLORS.length]),
+    releaseYear: Number.isInteger(releaseYear) && releaseYear >= 1950 && releaseYear <= 2100 ? releaseYear : null,
+    platforms: [...new Set(rawPlatforms.map((platform) => String(platform).trim().slice(0, 40)).filter(Boolean))].slice(0, 8),
+    archivedAt: validIso(game.archivedAt) ? game.archivedAt : null,
+    completedAt: validIso(game.completedAt) ? game.completedAt : null,
+    coverId: game.coverId ? String(game.coverId) : null,
+    createdAt,
+    updatedAt: validIso(game.updatedAt) ? game.updatedAt : createdAt
+  };
+}
+
 function normalizeSession(session) {
-  const plannedMinutes = Math.max(1, Number(session.plannedMinutes || session.basePlannedMinutes || 1));
+  const mode = normalizeSessionMode(session.mode);
+  const plannedMinutes = mode === SESSION_MODES.DUO
+    ? 0
+    : Math.max(1, Number(session.plannedMinutes || session.basePlannedMinutes || 1));
   const actualMinutes = Math.max(0, Number(session.actualMinutes || 0));
   const motives = normalizeMotives(session);
   const gameSegments = normalizeGameSegments(session, false);
   return {
     ...session,
     id: String(session.id || createId("session")),
+    mode,
     gameId: String(session.gameId || gameSegments[0]?.gameId || ""),
     startedAt: session.startedAt,
     endedAt: session.endedAt,
-    basePlannedMinutes: Math.max(1, Number(session.basePlannedMinutes || plannedMinutes)),
+    basePlannedMinutes: mode === SESSION_MODES.DUO ? 0 : Math.max(1, Number(session.basePlannedMinutes || plannedMinutes)),
     plannedMinutes,
     actualMinutes,
-    overtimeMinutes: Math.max(0, Number(session.overtimeMinutes ?? Math.ceil(actualMinutes - plannedMinutes))),
-    onTime: typeof session.onTime === "boolean" ? session.onTime : actualMinutes <= plannedMinutes + 1,
-    extensions: Array.isArray(session.extensions) ? session.extensions : [],
+    overtimeMinutes: mode === SESSION_MODES.DUO ? 0 : Math.max(0, Number(session.overtimeMinutes ?? Math.ceil(actualMinutes - plannedMinutes))),
+    onTime: mode === SESSION_MODES.DUO ? null : typeof session.onTime === "boolean" ? session.onTime : actualMinutes <= plannedMinutes + 1,
+    extensions: mode === SESSION_MODES.DUO ? [] : Array.isArray(session.extensions) ? session.extensions : [],
     pauses: Array.isArray(session.pauses) ? session.pauses : [],
     totalPausedMs: Math.max(0, Number(session.totalPausedMs || 0)),
     gameSegments,
-    checklistResults: session.checklistResults && typeof session.checklistResults === "object" ? session.checklistResults : {},
-    preState: clamp(Number(session.preState ?? 3), 1, 5),
-    satisfaction: clamp(Number(session.satisfaction ?? 3), 1, 5),
-    compulsivity: clamp(Number(session.compulsivity ?? 3), 1, 5),
-    motives,
-    motive: motives[0] || "",
-    afterAction: String(session.afterAction || ""),
-    afterActionConfirmed: Boolean(session.afterActionConfirmed),
-    outcomeNote: String(session.outcomeNote || ""),
-    override: session.override || null
+    checklistResults: mode === SESSION_MODES.DUO ? {} : session.checklistResults && typeof session.checklistResults === "object" ? session.checklistResults : {},
+    preState: mode === SESSION_MODES.DUO ? null : clamp(Number(session.preState ?? 3), 1, 5),
+    satisfaction: mode === SESSION_MODES.DUO ? null : clamp(Number(session.satisfaction ?? 3), 1, 5),
+    compulsivity: mode === SESSION_MODES.DUO ? null : clamp(Number(session.compulsivity ?? 3), 1, 5),
+    motives: mode === SESSION_MODES.DUO ? [] : motives,
+    motive: mode === SESSION_MODES.DUO ? "" : motives[0] || "",
+    afterAction: mode === SESSION_MODES.DUO ? "" : String(session.afterAction || ""),
+    afterActionConfirmed: mode === SESSION_MODES.DUO ? false : Boolean(session.afterActionConfirmed),
+    outcomeNote: mode === SESSION_MODES.DUO ? "" : String(session.outcomeNote || ""),
+    override: mode === SESSION_MODES.DUO ? null : session.override || null
   };
 }
 
 function normalizeActiveSession(session) {
-  const planned = Math.max(1, Number(session.plannedMinutes || session.basePlannedMinutes || 1));
+  const mode = normalizeSessionMode(session.mode);
+  const planned = mode === SESSION_MODES.DUO
+    ? 0
+    : Math.max(1, Number(session.plannedMinutes || session.basePlannedMinutes || 1));
   const motives = normalizeMotives(session);
   const gameSegments = normalizeGameSegments(session, true);
   const fallbackGameId = String(session.gameId || gameSegments[0]?.gameId || "");
   return {
     ...session,
     id: String(session.id || createId("session")),
+    mode,
     gameId: fallbackGameId,
     currentGameId: String(session.currentGameId || gameSegments.at(-1)?.gameId || fallbackGameId),
     startedAt: session.startedAt,
-    basePlannedMinutes: Math.max(1, Number(session.basePlannedMinutes || planned)),
+    basePlannedMinutes: mode === SESSION_MODES.DUO ? 0 : Math.max(1, Number(session.basePlannedMinutes || planned)),
     plannedMinutes: planned,
-    plannedEndAt: validIso(session.plannedEndAt)
+    plannedEndAt: mode === SESSION_MODES.DUO
+      ? null
+      : validIso(session.plannedEndAt)
       ? session.plannedEndAt
       : new Date(new Date(session.startedAt).getTime() + planned * 60_000).toISOString(),
-    extensions: Array.isArray(session.extensions) ? session.extensions : [],
+    extensions: mode === SESSION_MODES.DUO ? [] : Array.isArray(session.extensions) ? session.extensions : [],
     pauses: Array.isArray(session.pauses) ? session.pauses : [],
     totalPausedMs: Math.max(0, Number(session.totalPausedMs || 0)),
     gameSegments,
     pausedAt: validIso(session.pausedAt) ? session.pausedAt : null,
-    warningForEndAt: validIso(session.warningForEndAt) ? session.warningForEndAt : null,
-    checklistResults: session.checklistResults && typeof session.checklistResults === "object" ? session.checklistResults : {},
-    preState: clamp(Number(session.preState ?? 3), 1, 5),
-    motives,
-    motive: motives[0] || "",
-    afterAction: String(session.afterAction || ""),
-    override: session.override || null
+    warningForEndAt: mode === SESSION_MODES.DUO ? null : validIso(session.warningForEndAt) ? session.warningForEndAt : null,
+    checklistResults: mode === SESSION_MODES.DUO ? {} : session.checklistResults && typeof session.checklistResults === "object" ? session.checklistResults : {},
+    preState: mode === SESSION_MODES.DUO ? null : clamp(Number(session.preState ?? 3), 1, 5),
+    motives: mode === SESSION_MODES.DUO ? [] : motives,
+    motive: mode === SESSION_MODES.DUO ? "" : motives[0] || "",
+    afterAction: mode === SESSION_MODES.DUO ? "" : String(session.afterAction || ""),
+    override: mode === SESSION_MODES.DUO ? null : session.override || null
   };
+}
+
+function normalizeSessionMode(value) {
+  return value === SESSION_MODES.DUO ? SESSION_MODES.DUO : SESSION_MODES.GUARDED;
 }
 
 function normalizeWarningLead(value, fallback) {
@@ -316,11 +351,20 @@ export function shouldTriggerSessionWarning(activeSession, settings, now = Date.
 
 export function getTimerState(activeSession, now = Date.now()) {
   const start = new Date(activeSession.startedAt).getTime();
-  const plannedEnd = new Date(activeSession.plannedEndAt).getTime();
   const isPaused = validIso(activeSession.pausedAt);
   const effectiveNow = isPaused ? new Date(activeSession.pausedAt).getTime() : now;
   const storedPausedMs = Math.max(0, Number(activeSession.totalPausedMs || 0));
   const elapsedMs = Math.max(0, effectiveNow - start - storedPausedMs);
+  if (activeSession.mode === SESSION_MODES.DUO || !validIso(activeSession.plannedEndAt)) {
+    return {
+      elapsedMs,
+      remainingMs: null,
+      isPaused,
+      isOvertime: false,
+      progress: 0
+    };
+  }
+  const plannedEnd = new Date(activeSession.plannedEndAt).getTime();
   const plannedMs = Math.max(1, plannedEnd - start - storedPausedMs);
   const remainingMs = plannedMs - elapsedMs;
   return {
@@ -388,15 +432,93 @@ export function getGameTotals(state) {
   return totals;
 }
 
+export function getGameActivity(state, gameId) {
+  const targetId = String(gameId);
+  const sessions = [...(state.sessions || [])]
+    .filter((session) => getSessionGameIds(session).includes(targetId))
+    .sort((a, b) => new Date(a.startedAt) - new Date(b.startedAt));
+  const byDayMs = {};
+  let totalMs = 0;
+
+  sessions.forEach((session) => {
+    let segments = Array.isArray(session.gameSegments)
+      ? session.gameSegments.filter((segment) => String(segment?.gameId || "") === targetId)
+      : [];
+    if (!segments.length && String(session.gameId || "") === targetId) {
+      segments = [{
+        gameId: targetId,
+        startedAt: session.startedAt,
+        endedAt: session.endedAt,
+        durationMs: Math.max(0, Number(session.actualMinutes || 0) * 60_000)
+      }];
+    }
+
+    segments.forEach((segment) => {
+      const durationMs = segmentDurationMs(segment, new Date(session.endedAt).getTime());
+      if (!durationMs || !validIso(segment.startedAt)) return;
+      totalMs += durationMs;
+      distributeSegmentAcrossDays(byDayMs, segment.startedAt, segment.endedAt || session.endedAt, durationMs);
+    });
+  });
+
+  const byDay = Object.fromEntries(Object.entries(byDayMs).map(([key, milliseconds]) => [key, milliseconds / 60_000]));
+  const days = Object.entries(byDay)
+    .map(([key, minutes]) => ({ key, date: localDateFromKey(key), minutes }))
+    .sort((a, b) => b.key.localeCompare(a.key));
+  return {
+    gameId: targetId,
+    sessions,
+    sessionCount: sessions.length,
+    totalMinutes: totalMs / 60_000,
+    firstSessionAt: sessions[0]?.startedAt || null,
+    lastSessionAt: sessions.at(-1)?.startedAt || null,
+    byDay,
+    days
+  };
+}
+
+function distributeSegmentAcrossDays(target, startValue, endValue, durationMs) {
+  const start = new Date(startValue).getTime();
+  const end = new Date(endValue).getTime();
+  if (!Number.isFinite(start)) return;
+  if (!Number.isFinite(end) || end <= start) {
+    const key = localDateKey(startValue);
+    target[key] = (target[key] || 0) + durationMs;
+    return;
+  }
+
+  const wallDuration = end - start;
+  let cursor = start;
+  let allocated = 0;
+  while (cursor < end) {
+    const date = new Date(cursor);
+    const nextDay = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime();
+    const sliceEnd = Math.min(end, nextDay);
+    const isLastSlice = sliceEnd >= end;
+    const sliceDuration = isLastSlice ? durationMs - allocated : durationMs * ((sliceEnd - cursor) / wallDuration);
+    const key = localDateKey(date);
+    target[key] = (target[key] || 0) + Math.max(0, sliceDuration);
+    allocated += sliceDuration;
+    cursor = sliceEnd;
+  }
+}
+
+function localDateFromKey(key) {
+  const [year, month, day] = String(key).split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
 export function summarizeStats(state, now = new Date()) {
   const sessions = [...state.sessions].sort((a, b) => new Date(a.startedAt) - new Date(b.startedAt));
+  const controlSessions = sessions.filter((session) => session.mode !== SESSION_MODES.DUO);
+  const duoSessions = sessions.filter((session) => session.mode === SESSION_MODES.DUO);
   const totalMinutes = sessions.reduce((sum, session) => sum + Number(session.actualMinutes || 0), 0);
-  const totalPlanned = sessions.reduce((sum, session) => sum + Number(session.plannedMinutes || 0), 0);
-  const onTimeCount = sessions.filter((session) => session.onTime).length;
-  const extensions = sessions.reduce((sum, session) => sum + (session.extensions?.length || 0), 0);
-  const overrides = sessions.filter((session) => session.override).length;
+  const totalPlanned = controlSessions.reduce((sum, session) => sum + Number(session.plannedMinutes || 0), 0);
+  const onTimeCount = controlSessions.filter((session) => session.onTime).length;
+  const extensions = controlSessions.reduce((sum, session) => sum + (session.extensions?.length || 0), 0);
+  const overrides = controlSessions.filter((session) => session.override).length;
   const lateHour = state.settings?.lateHour ?? 22;
-  const lateSessions = sessions.filter((session) => new Date(session.startedAt).getHours() >= lateHour).length;
+  const lateSessions = controlSessions.filter((session) => new Date(session.startedAt).getHours() >= lateHour).length;
 
   const weekStart = startOfWeek(now);
   const weekMinutes = sessions
@@ -416,6 +538,7 @@ export function summarizeStats(state, now = new Date()) {
     getSessionGameBreakdown(session).forEach(({ gameId, minutes }) => {
       byGame[gameId] = (byGame[gameId] || 0) + minutes;
     });
+    if (session.mode === SESSION_MODES.DUO) return;
     normalizeMotives(session).forEach((motive) => { motives[motive] = (motives[motive] || 0) + 1; });
     preState[clamp(Number(session.preState ?? 3), 1, 5) - 1] += 1;
     satisfaction[clamp(Number(session.satisfaction ?? 3), 1, 5) - 1] += 1;
@@ -428,10 +551,13 @@ export function summarizeStats(state, now = new Date()) {
     totalPlanned,
     weekMinutes,
     onTimeCount,
-    onTimePercent: sessions.length ? Math.round((onTimeCount / sessions.length) * 100) : 0,
+    onTimePercent: controlSessions.length ? Math.round((onTimeCount / controlSessions.length) * 100) : 0,
     extensions,
     overrides,
     lateSessions,
+    controlSessions,
+    duoSessions,
+    duoMinutes: duoSessions.reduce((sum, session) => sum + Number(session.actualMinutes || 0), 0),
     byDay,
     byGame,
     motives,
@@ -462,9 +588,11 @@ export function buildWeeklyStats(sessions, weeks = 8, now = new Date()) {
       const startedAt = new Date(session.startedAt);
       return startedAt >= start && startedAt < end;
     });
+    const controlSessions = selected.filter((session) => session.mode !== SESSION_MODES.DUO);
+    const duoSessions = selected.filter((session) => session.mode === SESSION_MODES.DUO);
     const minutes = selected.reduce((sum, session) => sum + Number(session.actualMinutes || 0), 0);
-    const plannedMinutes = selected.reduce((sum, session) => sum + Number(session.plannedMinutes || 0), 0);
-    const onTimeCount = selected.filter((session) => session.onTime).length;
+    const plannedMinutes = controlSessions.reduce((sum, session) => sum + Number(session.plannedMinutes || 0), 0);
+    const onTimeCount = controlSessions.filter((session) => session.onTime).length;
     result.push({
       key: localDateKey(start),
       start: start.toISOString(),
@@ -472,8 +600,10 @@ export function buildWeeklyStats(sessions, weeks = 8, now = new Date()) {
       minutes,
       plannedMinutes,
       sessions: selected.length,
+      controlSessions: controlSessions.length,
+      duoSessions: duoSessions.length,
       onTimeCount,
-      onTimePercent: selected.length ? Math.round(onTimeCount / selected.length * 100) : 0
+      onTimePercent: controlSessions.length ? Math.round(onTimeCount / controlSessions.length * 100) : 0
     });
   }
   return result;

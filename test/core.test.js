@@ -8,11 +8,13 @@ import {
   createDefaultState,
   getAvailableWeekCount,
   getAccumulatedPausedMs,
+  getGameActivity,
   getGameTotals,
   getSessionGameBreakdown,
   getSessionsInRange,
   getTimerState,
   normalizeState,
+  SESSION_MODES,
   shouldTriggerSessionWarning,
   summarizeStats
 } from "../js/core.js";
@@ -93,7 +95,7 @@ test("import normalization preserves valid data and clamps settings", () => {
     events: [],
     settings: { extensionLimit: 99, lateHour: 4 }
   });
-  assert.equal(normalized.version, 5);
+  assert.equal(normalized.version, 6);
   assert.equal(normalized.games[0].title, "Test");
   assert.equal(normalized.settings.extensionLimit, 5);
   assert.equal(normalized.settings.lateHour, 18);
@@ -101,6 +103,26 @@ test("import normalization preserves valid data and clamps settings", () => {
   assert.equal(normalized.settings.warningVibration, false);
   assert.equal(normalized.settings.warningLeadMinutes, 5);
   assert.ok(normalized.checklist.length >= 4);
+});
+
+test("game metadata migration keeps archive and completion independent", () => {
+  const normalized = normalizeState({
+    games: [{
+      id: "g1",
+      title: "Astro Bot",
+      releaseYear: "2024",
+      device: "PS5",
+      archivedAt: "2026-07-20T10:00:00.000Z",
+      completedAt: "2026-07-19T18:00:00.000Z",
+      coverId: "cover-g1"
+    }],
+    sessions: []
+  });
+  assert.equal(normalized.games[0].releaseYear, 2024);
+  assert.deepEqual(normalized.games[0].platforms, ["PS5"]);
+  assert.equal(normalized.games[0].archivedAt, "2026-07-20T10:00:00.000Z");
+  assert.equal(normalized.games[0].completedAt, "2026-07-19T18:00:00.000Z");
+  assert.equal(normalized.games[0].coverId, "cover-g1");
 });
 
 test("statistics aggregate plan, actual time, extensions and overrides", () => {
@@ -244,4 +266,82 @@ test("game totals count a multi-game session once for every played game", () => 
   const stats = summarizeStats(state, new Date("2026-07-20T12:00:00.000Z"));
   assert.equal(stats.byGame.g1, 40);
   assert.equal(stats.byGame.g2, 20);
+});
+
+test("game activity uses only its segments and splits time across local days", () => {
+  const state = createDefaultState();
+  state.games = [{ id: "g1" }, { id: "g2" }];
+  state.sessions = [{
+    id: "s1",
+    gameId: "g1",
+    startedAt: "2026-07-20T23:30:00",
+    endedAt: "2026-07-21T01:00:00",
+    actualMinutes: 90,
+    gameSegments: [
+      { gameId: "g1", startedAt: "2026-07-20T23:30:00", endedAt: "2026-07-21T00:30:00", durationMs: 60 * 60_000 },
+      { gameId: "g2", startedAt: "2026-07-21T00:30:00", endedAt: "2026-07-21T01:00:00", durationMs: 30 * 60_000 }
+    ]
+  }];
+  const activity = getGameActivity(state, "g1");
+  assert.equal(activity.totalMinutes, 60);
+  assert.equal(activity.sessionCount, 1);
+  assert.equal(activity.byDay["2026-07-20"], 30);
+  assert.equal(activity.byDay["2026-07-21"], 30);
+  assert.equal(activity.firstSessionAt, "2026-07-20T23:30:00");
+  assert.equal(activity.lastSessionAt, "2026-07-20T23:30:00");
+});
+
+test("duo sessions count as play time but not as control metrics", () => {
+  const normalized = normalizeState({
+    games: [{ id: "g1", title: "It Takes Two" }],
+    sessions: [
+      {
+        id: "guarded",
+        gameId: "g1",
+        startedAt: "2026-07-20T10:00:00.000Z",
+        endedAt: "2026-07-20T11:00:00.000Z",
+        plannedMinutes: 60,
+        actualMinutes: 60,
+        onTime: true,
+        satisfaction: 4,
+        compulsivity: 2
+      },
+      {
+        id: "duo",
+        mode: "duo",
+        gameId: "g1",
+        startedAt: "2026-07-20T12:00:00.000Z",
+        endedAt: "2026-07-20T12:30:00.000Z",
+        plannedMinutes: 90,
+        actualMinutes: 30,
+        onTime: false,
+        satisfaction: 5,
+        compulsivity: 5
+      }
+    ],
+    activeSession: {
+      id: "active-duo",
+      mode: "duo",
+      gameId: "g1",
+      startedAt: "2026-07-20T13:00:00.000Z",
+      plannedEndAt: "2026-07-20T14:00:00.000Z"
+    }
+  });
+  assert.equal(normalized.sessions[1].mode, SESSION_MODES.DUO);
+  assert.equal(normalized.sessions[1].plannedMinutes, 0);
+  assert.equal(normalized.sessions[1].onTime, null);
+  assert.equal(normalized.sessions[1].satisfaction, null);
+  assert.equal(normalized.activeSession.plannedEndAt, null);
+  const timer = getTimerState(normalized.activeSession, new Date("2026-07-20T13:25:00.000Z").getTime());
+  assert.equal(timer.elapsedMs, 25 * 60_000);
+  assert.equal(timer.remainingMs, null);
+
+  const stats = summarizeStats(normalized, new Date("2026-07-20T15:00:00.000Z"));
+  assert.equal(stats.totalMinutes, 90);
+  assert.equal(stats.totalPlanned, 60);
+  assert.equal(stats.onTimePercent, 100);
+  assert.equal(stats.controlSessions.length, 1);
+  assert.equal(stats.duoSessions.length, 1);
+  assert.equal(stats.duoMinutes, 30);
+  assert.deepEqual(stats.compulsivity, [0, 1, 0, 0, 0]);
 });
