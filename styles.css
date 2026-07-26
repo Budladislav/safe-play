@@ -2081,6 +2081,18 @@ input[type="range"] {
   transition: none;
 }
 
+.timer-stage.duo {
+  border-color: rgba(139, 201, 255, 0.28);
+  background:
+    radial-gradient(circle at 50% 42%, rgba(139, 201, 255, 0.09), transparent 18rem),
+    linear-gradient(145deg, rgba(29, 38, 41, 0.96), rgba(22, 27, 25, 0.96));
+}
+
+.timer-stage.duo .timer-value,
+.timer-stage.duo .timer-label {
+  color: var(--blue);
+}
+
 
 .session-fact > .status-pill {
   margin-left: auto;

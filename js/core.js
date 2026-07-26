@@ -591,6 +591,7 @@ export function buildWeeklyStats(sessions, weeks = 8, now = new Date()) {
     const controlSessions = selected.filter((session) => session.mode !== SESSION_MODES.DUO);
     const duoSessions = selected.filter((session) => session.mode === SESSION_MODES.DUO);
     const minutes = selected.reduce((sum, session) => sum + Number(session.actualMinutes || 0), 0);
+    const duoMinutes = duoSessions.reduce((sum, session) => sum + Number(session.actualMinutes || 0), 0);
     const plannedMinutes = controlSessions.reduce((sum, session) => sum + Number(session.plannedMinutes || 0), 0);
     const onTimeCount = controlSessions.filter((session) => session.onTime).length;
     result.push({
@@ -602,6 +603,7 @@ export function buildWeeklyStats(sessions, weeks = 8, now = new Date()) {
       sessions: selected.length,
       controlSessions: controlSessions.length,
       duoSessions: duoSessions.length,
+      duoMinutes,
       onTimeCount,
       onTimePercent: controlSessions.length ? Math.round(onTimeCount / controlSessions.length * 100) : 0
     });

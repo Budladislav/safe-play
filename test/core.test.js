@@ -343,5 +343,7 @@ test("duo sessions count as play time but not as control metrics", () => {
   assert.equal(stats.controlSessions.length, 1);
   assert.equal(stats.duoSessions.length, 1);
   assert.equal(stats.duoMinutes, 30);
+  assert.equal(stats.weeks.at(-1).duoMinutes, 30);
+  assert.equal(stats.weeks.at(-1).controlSessions, 1);
   assert.deepEqual(stats.compulsivity, [0, 1, 0, 0, 0]);
 });
