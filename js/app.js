@@ -95,7 +95,10 @@ function getViewFromHash() {
 function navigate(view) {
   if (!validViews.includes(view) || view === "game") return;
   currentView = view;
-  if (window.location.hash !== `#${view}
+  if (window.location.hash !== `#${view}`) history.replaceState(null, "", `#${view}`);
+  render();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
 
 function navigateToGame(id) {
   if (!gameById(id)) return;
@@ -103,9 +106,6 @@ function navigateToGame(id) {
   currentView = "game";
   const hash = "#game/" + encodeURIComponent(selectedGameId);
   if (window.location.hash !== hash) history.pushState(null, "", hash);
-  render();
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}`) history.replaceState(null, "", `#${view}`);
   render();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
