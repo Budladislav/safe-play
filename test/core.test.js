@@ -14,6 +14,8 @@ import {
   getSessionsInRange,
   getTimerState,
   normalizeState,
+  orderGamesForSessionStart,
+  resolveEditedSessionTiming,
   SESSION_MODES,
   shouldTriggerSessionWarning,
   summarizeStats
@@ -84,6 +86,42 @@ test("session metrics separate actual duration and overrun", () => {
     20 * 60_000
   );
   assert.deepEqual(pausedMetrics, { actualMinutes: 53, overtimeMinutes: 0, onTime: true });
+});
+
+test("session entry puts the latest played active game first", () => {
+  const games = [{ id: "g1" }, { id: "g2" }, { id: "g3" }];
+  const sessions = [
+    { gameId: "g1", startedAt: "2026-07-20T10:00:00.000Z", endedAt: "2026-07-20T11:00:00.000Z", actualMinutes: 60 },
+    {
+      gameId: "g2",
+      currentGameId: "g3",
+      startedAt: "2026-07-21T10:00:00.000Z",
+      endedAt: "2026-07-21T11:00:00.000Z",
+      gameSegments: [
+        { gameId: "g2", startedAt: "2026-07-21T10:00:00.000Z", endedAt: "2026-07-21T10:30:00.000Z", durationMs: 30 * 60_000 },
+        { gameId: "g3", startedAt: "2026-07-21T10:30:00.000Z", endedAt: "2026-07-21T11:00:00.000Z", durationMs: 30 * 60_000 }
+      ]
+    }
+  ];
+  assert.deepEqual(orderGamesForSessionStart(games, sessions).map((game) => game.id), ["g3", "g2", "g1"]);
+  assert.deepEqual(orderGamesForSessionStart(games, sessions, "g1").map((game) => game.id), ["g1", "g3", "g2"]);
+});
+
+test("session timing editor can correct actual time or total pause", () => {
+  const byActual = resolveEditedSessionTiming(
+    "2026-07-20T10:00:00.000Z",
+    "2026-07-20T12:00:00.000Z",
+    { actualMinutes: 75, pausedMinutes: 110, source: "actual" }
+  );
+  assert.deepEqual(byActual, { wallDurationMs: 120 * 60_000, activeDurationMs: 75 * 60_000, totalPausedMs: 45 * 60_000 });
+
+  const byPause = resolveEditedSessionTiming(
+    "2026-07-20T10:00:00.000Z",
+    "2026-07-20T12:00:00.000Z",
+    { actualMinutes: 10, pausedMinutes: 15, source: "pause" }
+  );
+  assert.deepEqual(byPause, { wallDurationMs: 120 * 60_000, activeDurationMs: 105 * 60_000, totalPausedMs: 15 * 60_000 });
+  assert.equal(resolveEditedSessionTiming("2026-07-20T10:00:00.000Z", "2026-07-20T12:00:00.000Z", { pausedMinutes: 120 }), null);
 });
 
 test("import normalization preserves valid data and clamps settings", () => {

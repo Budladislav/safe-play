@@ -297,6 +297,42 @@ export function getSessionGameIds(session) {
   return getSessionGameBreakdown(session).map((item) => item.gameId);
 }
 
+export function orderGamesForSessionStart(games, sessions, preselectedGameId = "") {
+  const items = Array.isArray(games) ? [...games] : [];
+  const allowedIds = new Set(items.map((game) => String(game.id)));
+  const recentRank = new Map();
+  let rank = 0;
+
+  [...(Array.isArray(sessions) ? sessions : [])]
+    .sort((a, b) => new Date(b.endedAt || b.startedAt) - new Date(a.endedAt || a.startedAt))
+    .forEach((session) => {
+      const segmentIds = Array.isArray(session?.gameSegments)
+        ? session.gameSegments.map((segment) => String(segment?.gameId || "")).filter(Boolean).reverse()
+        : [];
+      const candidates = [session?.currentGameId, ...segmentIds, session?.gameId, ...getSessionGameIds(session)]
+        .map((id) => String(id || ""))
+        .filter(Boolean);
+      candidates.forEach((gameId) => {
+        if (allowedIds.has(gameId) && !recentRank.has(gameId)) recentRank.set(gameId, rank++);
+      });
+    });
+
+  const explicitId = allowedIds.has(String(preselectedGameId)) ? String(preselectedGameId) : "";
+  return items
+    .map((game, index) => ({ game, index }))
+    .sort((a, b) => {
+      if (explicitId) {
+        if (String(a.game.id) === explicitId) return -1;
+        if (String(b.game.id) === explicitId) return 1;
+      }
+      const aRank = recentRank.get(String(a.game.id));
+      const bRank = recentRank.get(String(b.game.id));
+      if (aRank !== undefined || bRank !== undefined) return (aRank ?? Number.MAX_SAFE_INTEGER) - (bRank ?? Number.MAX_SAFE_INTEGER);
+      return a.index - b.index;
+    })
+    .map(({ game }) => game);
+}
+
 function isValidSession(session) {
   return Boolean(
     session &&
@@ -331,6 +367,27 @@ export function calculateSessionMetrics(startedAt, endedAt, plannedMinutes, paus
     overtimeMinutes,
     onTime: actualMinutesExact <= plannedMinutes + 1 / 60
   };
+}
+
+export function resolveEditedSessionTiming(startedAt, endedAt, { actualMinutes, pausedMinutes, source = "pause" } = {}) {
+  const start = new Date(startedAt).getTime();
+  const end = new Date(endedAt).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+  const wallDurationMs = end - start;
+  let activeDurationMs;
+  let totalPausedMs;
+
+  if (source === "actual") {
+    activeDurationMs = Number(actualMinutes) * 60_000;
+    if (!Number.isFinite(activeDurationMs) || activeDurationMs <= 0 || activeDurationMs > wallDurationMs) return null;
+    totalPausedMs = wallDurationMs - activeDurationMs;
+  } else {
+    totalPausedMs = Number(pausedMinutes) * 60_000;
+    if (!Number.isFinite(totalPausedMs) || totalPausedMs < 0 || totalPausedMs >= wallDurationMs) return null;
+    activeDurationMs = wallDurationMs - totalPausedMs;
+  }
+
+  return { wallDurationMs, activeDurationMs, totalPausedMs };
 }
 
 export function getAccumulatedPausedMs(session, at = Date.now()) {

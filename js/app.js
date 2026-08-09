@@ -27,6 +27,8 @@ import {
   localDateKey,
   motiveLabel,
   normalizeState,
+  orderGamesForSessionStart,
+  resolveEditedSessionTiming,
   shouldTriggerSessionWarning,
   startOfWeek,
   summarizeStats
@@ -868,7 +870,7 @@ function renderSettings() {
 }
 
 function openEntryModal(preselectedGameId = "") {
-  const playableGames = activeGames();
+  const playableGames = orderGamesForSessionStart(activeGames(), state.sessions, preselectedGameId);
   if (!playableGames.length) {
     gameSaveReturn = "entry";
     openGameModal();
@@ -880,6 +882,7 @@ function openEntryModal(preselectedGameId = "") {
     openReleaseCooldownModal(() => openEntryModal(preselectedGameId));
     return;
   }
+  const defaultGameId = playableGames.find((game) => game.id === preselectedGameId)?.id || playableGames[0].id;
 
   const checks = [...state.checklist].filter((item) => item.enabled).sort((a, b) => a.order - b.order);
   const end = new Date(Date.now() + 60 * 60_000);
@@ -921,7 +924,7 @@ function openEntryModal(preselectedGameId = "") {
               <div class="field">
                 <label for="entryGame">Игра</label>
                 <select class="select" id="entryGame" name="gameId" required>
-                  ${playableGames.map((game) => `<option value="${escapeAttr(game.id)}" ${game.id === preselectedGameId ? "selected" : ""}>${escapeHTML(game.title)}</option>`).join("")}
+                  ${playableGames.map((game) => `<option value="${escapeAttr(game.id)}" ${game.id === defaultGameId ? "selected" : ""}>${escapeHTML(game.title)}</option>`).join("")}
                 </select>
               </div>
               <div class="field">
@@ -1746,6 +1749,50 @@ function openDuoSessionDetails(session) {
   `);
 }
 
+function editableMinutes(milliseconds) {
+  return String(Math.round(Math.max(0, Number(milliseconds) || 0) / 6_000) / 10);
+}
+
+function getSessionEditorGameIds(session) {
+  const ids = getSessionGameIds(session).map(String).filter(Boolean);
+  return ids.length ? ids : session.gameId ? [String(session.gameId)] : [];
+}
+
+function buildEditedPauseRecords(totalPausedMs, startedAt, endedAt) {
+  if (totalPausedMs <= 0) return [];
+  const sessionStart = new Date(startedAt).getTime();
+  const sessionEnd = new Date(endedAt).getTime();
+  const pauseStart = Math.max(sessionStart, sessionEnd - totalPausedMs);
+  return [{
+    startedAt: new Date(pauseStart).toISOString(),
+    endedAt: new Date(sessionEnd).toISOString(),
+    durationMs: totalPausedMs,
+    edited: true
+  }];
+}
+
+function syncEditedSessionTiming(form, changedField = "") {
+  if (!form) return;
+  if (changedField === "actual" || changedField === "pause") form.dataset.timeEditSource = changedField;
+  const startedAt = new Date(form.elements.startedAt?.value || "");
+  const endedAt = new Date(form.elements.endedAt?.value || "");
+  const actualInput = form.elements.actualMinutes;
+  const pauseInput = form.elements.pausedMinutes;
+  const wallDurationMs = endedAt.getTime() - startedAt.getTime();
+  if (!actualInput || !pauseInput || !Number.isFinite(wallDurationMs) || wallDurationMs <= 0) return;
+
+  if (form.dataset.timeEditSource === "actual") {
+    const actualMs = Number(actualInput.value) * 60_000;
+    if (Number.isFinite(actualMs)) pauseInput.value = editableMinutes(Math.max(0, wallDurationMs - actualMs));
+    return;
+  }
+
+  const pausedMs = form.dataset.timeEditSource === "pause"
+    ? Number(pauseInput.value) * 60_000
+    : Number(form.dataset.originalPausedMs || 0);
+  if (Number.isFinite(pausedMs)) actualInput.value = editableMinutes(Math.max(0, wallDurationMs - pausedMs));
+}
+
 function openEditSessionModal(id) {
   const session = state.sessions.find((item) => item.id === id);
   if (!session) return;
@@ -1755,16 +1802,21 @@ function openEditSessionModal(id) {
   }
   const selectedMotives = new Set(session.motives?.length ? session.motives : session.motive ? [session.motive] : []);
   const breakdown = Object.fromEntries(getSessionGameBreakdown(session).map((item) => [item.gameId, item.minutes]));
-  const allocationIds = [...new Set([...Object.keys(breakdown), ...state.games.map((game) => game.id)])];
+  const allocationIds = getSessionEditorGameIds(session);
+  const wallDurationMs = Math.max(0, new Date(session.endedAt).getTime() - new Date(session.startedAt).getTime());
+  const currentPausedMs = Math.min(wallDurationMs, Math.max(0, Number(session.totalPausedMs || 0)));
+  const currentActualMs = Math.max(0, wallDurationMs - currentPausedMs);
   openModal(`
     <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="editSessionTitle">
       <div class="modal-header"><div><span class="eyebrow">Коррекция фактов</span><h2 id="editSessionTitle">Редактировать сессию</h2><p>После сохранения план, факт и статистика будут пересчитаны.</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
-      <form id="editSessionForm" data-session-id="${escapeAttr(session.id)}">
+      <form id="editSessionForm" data-session-id="${escapeAttr(session.id)}" data-original-paused-ms="${currentPausedMs}" data-time-edit-source="stored">
         <div class="modal-body">
           <div class="form-grid">
             <div class="field"><label for="editPlannedMinutes">План, минут</label><input class="input" id="editPlannedMinutes" name="plannedMinutes" type="number" min="1" max="1440" value="${session.plannedMinutes}" required></div>
-            <div class="field"><label for="editStartedAt">Начало</label><input class="input" id="editStartedAt" name="startedAt" type="datetime-local" step="1" value="${toDateTimeLocal(session.startedAt)}" required></div>
-            <div class="field"><label for="editEndedAt">Окончание</label><input class="input" id="editEndedAt" name="endedAt" type="datetime-local" step="1" value="${toDateTimeLocal(session.endedAt)}" required></div>
+            <div class="field"><label for="editActualMinutes">Фактическое время, минут</label><input class="input" id="editActualMinutes" name="actualMinutes" type="number" min="0.1" max="1440" step="0.1" value="${editableMinutes(currentActualMs)}" data-edit-session-time="actual" required></div>
+            <div class="field"><label for="editStartedAt">Начало</label><input class="input" id="editStartedAt" name="startedAt" type="datetime-local" step="1" value="${toDateTimeLocal(session.startedAt)}" data-edit-session-time="bounds" required></div>
+            <div class="field"><label for="editEndedAt">Окончание</label><input class="input" id="editEndedAt" name="endedAt" type="datetime-local" step="1" value="${toDateTimeLocal(session.endedAt)}" data-edit-session-time="bounds" required></div>
+            <div class="field full"><label for="editPausedMinutes">Общая пауза, минут</label><input class="input" id="editPausedMinutes" name="pausedMinutes" type="number" min="0" max="1440" step="0.1" value="${editableMinutes(currentPausedMs)}" data-edit-session-time="pause" required><small>Факт и пауза связаны: изменение одного значения пересчитает второе по времени начала и окончания.</small></div>
             <div class="field full">
               <span class="field-label">Распределение времени по играм</span>
               <small>Укажите относительное время. При сохранении сумма будет приведена к фактической длительности сессии.</small>
@@ -1799,11 +1851,14 @@ function updateSession(form) {
   const startedAt = new Date(String(data.get("startedAt")));
   const endedAt = new Date(String(data.get("endedAt")));
   const plannedMinutes = Number(data.get("plannedMinutes"));
-  const activeDurationMs = endedAt.getTime() - startedAt.getTime() - Math.max(0, Number(session.totalPausedMs || 0));
-  if (!Number.isFinite(startedAt.getTime()) || !Number.isFinite(endedAt.getTime()) || !Number.isFinite(plannedMinutes) || plannedMinutes < 1 || plannedMinutes > 1440 || endedAt <= startedAt || activeDurationMs <= 0) {
-    toast("Проверьте время", "Окончание должно быть позже начала с учётом сохранённых пауз.");
+  const timeEditSource = form.dataset.timeEditSource === "actual" ? "actual" : "pause";
+  const pausedMinutes = form.dataset.timeEditSource === "stored" ? Number(form.dataset.originalPausedMs || 0) / 60_000 : Number(data.get("pausedMinutes"));
+  const timing = resolveEditedSessionTiming(startedAt, endedAt, { actualMinutes: Number(data.get("actualMinutes")), pausedMinutes, source: timeEditSource });
+  if (!Number.isFinite(plannedMinutes) || plannedMinutes < 1 || plannedMinutes > 1440 || !timing) {
+    toast("Проверьте время", "Фактическое время должно быть больше нуля, а пауза — короче всей сессии.");
     return;
   }
+  const { activeDurationMs, totalPausedMs } = timing;
   const allocations = [...form.querySelectorAll("[data-game-allocation]")]
     .map((input) => ({ gameId: input.dataset.gameId, weight: Math.max(0, Number(input.value || 0)) }))
     .filter((item) => item.gameId && item.weight > 0);
@@ -1822,7 +1877,9 @@ function updateSession(form) {
     return { id: createId("game-segment"), gameId: item.gameId, startedAt: segmentStartedAt, endedAt: new Date(cursor).toISOString(), durationMs };
   });
   const motives = data.getAll("motives").map(String);
-  const metrics = calculateSessionMetrics(startedAt.toISOString(), endedAt.toISOString(), plannedMinutes, session.totalPausedMs || 0);
+  const metrics = calculateSessionMetrics(startedAt.toISOString(), endedAt.toISOString(), plannedMinutes, totalPausedMs);
+  const timeBoundsChanged = startedAt.toISOString() !== session.startedAt || endedAt.toISOString() !== session.endedAt;
+  const pauseChanged = Math.abs(totalPausedMs - Number(session.totalPausedMs || 0)) >= 1;
   const updated = {
     ...session,
     gameId: allocations[0].gameId,
@@ -1832,6 +1889,9 @@ function updateSession(form) {
     endedAt: endedAt.toISOString(),
     plannedMinutes,
     basePlannedMinutes: Math.max(1, plannedMinutes - session.extensions.reduce((sum, extension) => sum + Number(extension.minutes || 0), 0)),
+    plannedEndAt: new Date(startedAt.getTime() + plannedMinutes * 60_000 + totalPausedMs).toISOString(),
+    pauses: timeBoundsChanged || pauseChanged ? buildEditedPauseRecords(totalPausedMs, startedAt, endedAt) : session.pauses,
+    totalPausedMs,
     ...metrics,
     preState: Number(data.get("preState")),
     satisfaction: Number(data.get("satisfaction")),
@@ -1848,19 +1908,25 @@ function updateSession(form) {
   saveState();
   closeModal();
   render();
-  toast("Сессия обновлена", "План, факт и время по играм пересчитаны.");
+  toast("Сессия обновлена", "План, факт, пауза и время по играм пересчитаны.");
 }
 
 function openEditDuoSessionModal(session) {
   const breakdown = Object.fromEntries(getSessionGameBreakdown(session).map((item) => [item.gameId, item.minutes]));
-  const allocationIds = [...new Set([...Object.keys(breakdown), ...state.games.map((game) => game.id)])];
+  const allocationIds = getSessionEditorGameIds(session);
+  const wallDurationMs = Math.max(0, new Date(session.endedAt).getTime() - new Date(session.startedAt).getTime());
+  const currentPausedMs = Math.min(wallDurationMs, Math.max(0, Number(session.totalPausedMs || 0)));
+  const currentActualMs = Math.max(0, wallDurationMs - currentPausedMs);
   openModal(`
     <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="editDuoTitle">
       <div class="modal-header"><div><span class="eyebrow">Коррекция фактов · с друзьями</span><h2 id="editDuoTitle">Редактировать дуо-сессию</h2><p>Можно исправить время и распределение между играми.</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
-      <form id="editDuoSessionForm" data-session-id="${escapeAttr(session.id)}">
+      <form id="editDuoSessionForm" data-session-id="${escapeAttr(session.id)}" data-original-paused-ms="${currentPausedMs}" data-time-edit-source="stored">
         <div class="modal-body"><div class="form-grid">
-          <div class="field"><label for="editDuoStartedAt">Начало</label><input class="input" id="editDuoStartedAt" name="startedAt" type="datetime-local" step="1" value="${toDateTimeLocal(session.startedAt)}" required></div>
-          <div class="field"><label for="editDuoEndedAt">Окончание</label><input class="input" id="editDuoEndedAt" name="endedAt" type="datetime-local" step="1" value="${toDateTimeLocal(session.endedAt)}" required></div>
+          <div class="field"><label for="editDuoActualMinutes">Фактическое время, минут</label><input class="input" id="editDuoActualMinutes" name="actualMinutes" type="number" min="0.1" max="1440" step="0.1" value="${editableMinutes(currentActualMs)}" data-edit-session-time="actual" required></div>
+          <div class="field"><label for="editDuoPausedMinutes">Общая пауза, минут</label><input class="input" id="editDuoPausedMinutes" name="pausedMinutes" type="number" min="0" max="1440" step="0.1" value="${editableMinutes(currentPausedMs)}" data-edit-session-time="pause" required></div>
+          <div class="field"><label for="editDuoStartedAt">Начало</label><input class="input" id="editDuoStartedAt" name="startedAt" type="datetime-local" step="1" value="${toDateTimeLocal(session.startedAt)}" data-edit-session-time="bounds" required></div>
+          <div class="field"><label for="editDuoEndedAt">Окончание</label><input class="input" id="editDuoEndedAt" name="endedAt" type="datetime-local" step="1" value="${toDateTimeLocal(session.endedAt)}" data-edit-session-time="bounds" required></div>
+          <div class="field full"><small>Факт и пауза связаны и всегда складываются во время между началом и окончанием.</small></div>
           <div class="field full"><span class="field-label">Распределение времени по играм</span><small>Сумма будет приведена к фактической длительности сессии.</small><div class="game-allocation-list">${allocationIds.map((gameId) => {
             const game = gameById(gameId);
             const minutes = breakdown[gameId] || 0;
@@ -1880,11 +1946,14 @@ function updateDuoSession(form) {
   const data = new FormData(form);
   const startedAt = new Date(String(data.get("startedAt")));
   const endedAt = new Date(String(data.get("endedAt")));
-  const activeDurationMs = endedAt.getTime() - startedAt.getTime() - Math.max(0, Number(session.totalPausedMs || 0));
-  if (!Number.isFinite(startedAt.getTime()) || !Number.isFinite(endedAt.getTime()) || endedAt <= startedAt || activeDurationMs <= 0) {
-    toast("Проверьте время", "Окончание должно быть позже начала с учётом сохранённых пауз.");
+  const timeEditSource = form.dataset.timeEditSource === "actual" ? "actual" : "pause";
+  const pausedMinutes = form.dataset.timeEditSource === "stored" ? Number(form.dataset.originalPausedMs || 0) / 60_000 : Number(data.get("pausedMinutes"));
+  const timing = resolveEditedSessionTiming(startedAt, endedAt, { actualMinutes: Number(data.get("actualMinutes")), pausedMinutes, source: timeEditSource });
+  if (!timing) {
+    toast("Проверьте время", "Фактическое время должно быть больше нуля, а пауза — короче всей сессии.");
     return;
   }
+  const { activeDurationMs, totalPausedMs } = timing;
   const allocations = [...form.querySelectorAll("[data-game-allocation]")].map((input) => ({ gameId: input.dataset.gameId, weight: Math.max(0, Number(input.value || 0)) })).filter((item) => item.gameId && item.weight > 0);
   const totalWeight = allocations.reduce((sum, item) => sum + item.weight, 0);
   if (!allocations.length || totalWeight <= 0) {
@@ -1901,7 +1970,9 @@ function updateDuoSession(form) {
     return { id: createId("game-segment"), gameId: item.gameId, startedAt: segmentStartedAt, endedAt: new Date(cursor).toISOString(), durationMs };
   });
   const editedAt = new Date().toISOString();
-  const updated = { ...session, gameId: allocations[0].gameId, currentGameId: allocations.at(-1).gameId, gameSegments, startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString(), actualMinutes: Math.max(1, Math.ceil(activeDurationMs / 60_000)), editedAt };
+  const timeBoundsChanged = startedAt.toISOString() !== session.startedAt || endedAt.toISOString() !== session.endedAt;
+  const pauseChanged = Math.abs(totalPausedMs - Number(session.totalPausedMs || 0)) >= 1;
+  const updated = { ...session, gameId: allocations[0].gameId, currentGameId: allocations.at(-1).gameId, gameSegments, startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString(), pauses: timeBoundsChanged || pauseChanged ? buildEditedPauseRecords(totalPausedMs, startedAt, endedAt) : session.pauses, totalPausedMs, actualMinutes: Math.max(1, Math.ceil(activeDurationMs / 60_000)), editedAt };
   state.sessions = state.sessions.map((item) => item.id === id ? updated : item);
   state.events.push({ id: createId("event"), type: "session-edited", at: editedAt, sessionId: id });
   saveState();
@@ -2679,11 +2750,17 @@ document.addEventListener("input", (event) => {
     const output = document.querySelector(`#${event.target.dataset.rangeOutput}`);
     if (output) output.textContent = event.target.value;
   }
+  if (event.target.matches("[data-edit-session-time]")) {
+    syncEditedSessionTiming(event.target.closest("form"), event.target.dataset.editSessionTime);
+  }
   if (event.target.matches("[data-check-id]")) updateEntryHint();
 });
 
 document.addEventListener("change", (event) => {
   const target = event.target;
+  if (target.matches("[data-edit-session-time]")) {
+    syncEditedSessionTiming(target.closest("form"), target.dataset.editSessionTime);
+  }
   if (target.matches("[data-library-sort]")) {
     gameSortKey = target.value;
     render();
