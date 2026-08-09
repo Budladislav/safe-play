@@ -32,7 +32,7 @@ import {
   shouldTriggerSessionWarning,
   startOfWeek,
   summarizeStats
-} from "./core.js?v=2.4.0";
+} from "./core.js?v=2.4.1";
 import {
   clearCovers,
   deleteCover,
@@ -40,7 +40,7 @@ import {
   processCoverFile,
   replaceCovers,
   saveCover
-} from "./covers.js?v=2.4.0";
+} from "./covers.js?v=2.4.1";
 
 const app = document.querySelector("#app");
 const modalRoot = document.querySelector("#modalRoot");
