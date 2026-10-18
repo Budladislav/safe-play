@@ -23,7 +23,6 @@ import {
   getSessionGameIds,
   getSessionsInRange,
   getTimerState,
-  isCooldownActive,
   localDateKey,
   motiveLabel,
   normalizeState,
@@ -32,7 +31,7 @@ import {
   shouldTriggerSessionWarning,
   startOfWeek,
   summarizeStats
-} from "./core.js?v=2.4.1";
+} from "./core.js?v=2.5.0";
 import {
   clearCovers,
   deleteCover,
@@ -40,7 +39,7 @@ import {
   processCoverFile,
   replaceCovers,
   saveCover
-} from "./covers.js?v=2.4.1";
+} from "./covers.js?v=2.5.0";
 
 const app = document.querySelector("#app");
 const modalRoot = document.querySelector("#modalRoot");
@@ -146,7 +145,6 @@ function renderHome() {
 
   const stats = summarizeStats(state);
   const playableGames = activeGames();
-  const cooldown = isCooldownActive(state.cooldown);
   const lastSession = [...state.sessions].sort((a, b) => new Date(b.endedAt) - new Date(a.endedAt))[0];
   const lastGameLabel = lastSession ? sessionGameLabel(lastSession) : "";
 
@@ -155,18 +153,17 @@ function renderHome() {
       <div class="view-header">
         <div>
           <span class="eyebrow">${getGreeting()}</span>
-          <h1>Сначала решение. Потом игра.</h1>
-          <p>Короткая пауза помогает заранее выбрать границы и не спорить с собой уже внутри сессии.</p>
+          <h1>Ваш игровой дневник</h1>
+          <p>Сохраняйте время, впечатления и настроение. Играйте в своём темпе.</p>
         </div>
       </div>
 
-      ${cooldown ? renderCooldownBanner() : ""}
 
       <div class="dashboard-grid">
         <article class="card hero">
           <div class="hero-copy">
             <span class="eyebrow">Новая сессия</span>
-            <h1>Один спокойный вдох <span>до старта.</span></h1>
+            <h1>Новая запись <span>об игре.</span></h1>
             <p>Проверь базовые вещи, назови своё состояние и зафиксируй время окончания. Это займёт около минуты.</p>
           </div>
           <div class="hero-actions">
@@ -220,28 +217,12 @@ function renderHome() {
   `;
 }
 
-function renderCooldownBanner() {
-  const until = formatDateTime(state.cooldown.until, { weekday: "short" });
-  return `
-    <article class="card warning-card" style="margin-bottom:18px">
-      <div class="card-header" style="margin:0">
-        <div>
-          <span class="eyebrow">Мягкая пауза</span>
-          <h2>Библиотека приглушена до ${until}</h2>
-          <p>Предыдущая сессия закончилась с сильным желанием продолжить или заметным перерасходом.</p>
-        </div>
-        <button class="button small" data-action="release-cooldown">Снять паузу осознанно</button>
-      </div>
-    </article>
-  `;
-}
 
 function renderActiveSession() {
   const session = state.activeSession;
   if (session.mode === SESSION_MODES.DUO) return renderDuoActiveSession();
   const currentGame = gameById(activeGameId(session));
   const timer = getTimerState(session);
-  const extensionsLeft = Math.max(0, state.settings.extensionLimit - session.extensions.length);
   const canSwitchGame = activeGames().some((game) => game.id !== activeGameId(session));
   lastTimerWasOvertime = timer.isOvertime;
 
@@ -279,8 +260,8 @@ function renderActiveSession() {
             <div class="button-row" style="justify-content:center;margin-top:24px">
               <button class="button ${timer.isPaused ? "primary" : ""}" data-action="toggle-session-pause">${timer.isPaused ? "Продолжить" : "Пауза"}</button>
               <button class="button ${timer.isPaused ? "" : "primary"}" data-action="open-finish">Закончить сейчас</button>
-              <button class="button" data-action="open-extension" ${extensionsLeft <= 0 ? "disabled" : ""}>
-                Продлить ${extensionsLeft > 0 ? `· осталось ${extensionsLeft}` : "· лимит исчерпан"}
+              <button class="button" data-action="open-extension" >
+                Продлить
               </button>
             </div>
           </div>
@@ -314,7 +295,7 @@ function renderActiveSession() {
           </article>
 
           <article class="card compact ${timer.isOvertime ? "danger-card" : ""}" id="decisionCard">
-            ${renderTimerDecision(timer.isOvertime, extensionsLeft)}
+            ${renderTimerDecision(timer.isOvertime)}
           </article>
         </div>
       </div>
@@ -341,28 +322,27 @@ function renderDuoActiveSession() {
         </article>
         <div class="stack">
           <article class="card compact"><div class="card-header"><div><h3>Игры в сессии</h3><p>Можно переключаться, общий таймер продолжится.</p></div><button class="button small" data-action="open-game-switch" ${canSwitchGame ? "" : "disabled"}>Сменить</button></div><div id="activeGameBreakdown">${renderSessionGameBreakdown(session, true)}</div></article>
-          <article class="card compact accent-card"><div class="card-header"><div><span class="eyebrow">Дуо-режим</span><h3>Только таймер</h3></div></div><p class="muted-text">Эта сессия войдёт в игровое время и статистику игр, но не повлияет на план/факт, процент остановок вовремя, оценки или cooldown.</p></article>
+          <article class="card compact accent-card"><div class="card-header"><div><span class="eyebrow">Дуо-режим</span><h3>Только таймер</h3></div></div><p class="muted-text">Эта сессия войдёт в игровое время и статистику игр, но не повлияет на план/факт, процент остановок вовремя, оценки.</p></article>
         </div>
       </div>
     </section>
   `;
 }
 
-function renderTimerDecision(isOvertime, extensionsLeft) {
+function renderTimerDecision(isOvertime) {
   if (!isOvertime) {
     return `
       <div class="card-header"><div><h3>Когда время закончится</h3><p>Экран останется доступным.</p></div></div>
-      <p class="muted-text">Таймер станет красным и начнёт показывать перерасход. После этого нужно закончить или отдельно зафиксировать продление.</p>
+      <p class="muted-text">Таймер покажет время сверх плана. Можно продолжить игру, изменить план или сохранить итог.</p>
     `;
   }
   return `
     <span class="eyebrow text-danger">Новая точка решения</span>
     <h3 style="margin:8px 0 6px">Плановое время вышло</h3>
-    <p class="muted-text">Не нужно останавливаться мгновенно. Нужно только снова решить, что происходит.</p>
+    <p class="muted-text">План — ориентир для дневника. Можно продолжать в своём темпе.</p>
     <div class="decision-box">
       <button class="button primary" data-action="open-finish">Завершить</button>
-      <button class="button" data-action="open-extension" ${extensionsLeft <= 0 ? "disabled" : ""}>Продлить на 15/30 минут</button>
-      ${extensionsLeft <= 0 ? `<span class="subtle-text">Лимит продлений на эту сессию исчерпан.</span>` : ""}
+      <button class="button" data-action="open-extension">Продлить на 15/30 минут</button>
     </div>
   `;
 }
@@ -392,7 +372,6 @@ function tickTimer() {
 
 function renderLibrary() {
   const totals = getGameTotals(state);
-  const cooldown = isCooldownActive(state.cooldown);
   const games = sortGames(activeGames());
   return `
     <section class="view">
@@ -402,18 +381,16 @@ function renderLibrary() {
           <h1>Активные игры</h1>
         </div>
         <div class="header-actions">
-          ${cooldown ? `<button class="button" data-action="release-cooldown">Снять мягкую паузу</button>` : ""}
           <button class="button primary" data-action="add-game">${icon("plus")} Добавить игру</button>
         </div>
       </div>
 
       ${renderLibraryTabs("library")}
       ${renderGameSortControls()}
-      ${cooldown ? `<div class="notice warning" style="margin-bottom:18px"><span>◈</span><div><strong>Библиотека приглушена</strong><br>Это визуальная пауза, а не запрет. Её можно снять явным действием.</div></div>` : ""}
 
       ${games.length ? `
         <div class="game-grid">
-          ${games.map((game) => renderGameCard(game, totals[game.id], cooldown)).join("")}
+          ${games.map((game) => renderGameCard(game, totals[game.id])).join("")}
         </div>
       ` : `
         <div class="empty-state">
@@ -500,11 +477,11 @@ function sortGames(games) {
   });
 }
 
-function renderGameCard(game, totals = { minutes: 0, sessions: 0 }, cooldown = false) {
+function renderGameCard(game, totals = { minutes: 0, sessions: 0 }) {
   const cover = coverForGame(game);
   const meta = [game.releaseYear, ...(game.platforms || [])].filter(Boolean);
   return `
-    <article class="game-card ${cooldown ? "cooldown" : ""}" style="--game-color:${escapeAttr(game.color)}">
+    <article class="game-card" style="--game-color:${escapeAttr(game.color)}">
       <div>
         <div class="game-card-header">
           <button class="game-cover-button" data-action="open-game-details" data-id="${escapeAttr(game.id)}" aria-label="Открыть ${escapeAttr(game.title)}">
@@ -526,9 +503,7 @@ function renderGameCard(game, totals = { minutes: 0, sessions: 0 }, cooldown = f
         <div class="game-time"><strong>${formatGameDuration(totals.minutes)}</strong><span>всего в игре</span></div>
         ${game.archivedAt
           ? `<button class="button small" data-action="open-game-details" data-id="${escapeAttr(game.id)}">Открыть</button>`
-          : cooldown
-            ? `<span class="lock-chip">◇ пауза</span>`
-            : `<button class="button small" data-action="open-entry" data-game-id="${escapeAttr(game.id)}">Играть</button>`}
+          : `<button class="button small" data-action="open-entry" data-game-id="${escapeAttr(game.id)}">Играть</button>`}
       </div>
     </article>
   `;
@@ -772,7 +747,7 @@ function renderSettings() {
         <div>
           <span class="eyebrow">Ваши правила</span>
           <h1>Настройки</h1>
-          <p>Подстройте трение под себя. Все изменения сохраняются только на этом устройстве.</p>
+          <p>Настройте дневник под себя. Все изменения сохраняются только на этом устройстве.</p>
         </div>
       </div>
 
@@ -793,7 +768,7 @@ function renderSettings() {
                   <button class="setting-copy" data-action="edit-check" data-id="${escapeAttr(item.id)}" style="border:0;background:none;color:inherit;text-align:left;cursor:pointer">
                     <strong>${escapeHTML(item.title)}</strong><span>нажмите, чтобы изменить</span>
                   </button>
-                  <span class="status-pill ${item.required ? "required" : "info"}">${item.required ? "обязательный" : "информационный"}</span>
+                  <span class="status-pill info">заметка</span>
                   <label class="switch" title="Включить пункт"><input type="checkbox" data-setting="check-enabled" data-id="${escapeAttr(item.id)}" ${item.enabled ? "checked" : ""}><span class="switch-slider"></span></label>
                 </div>
               `).join("")}
@@ -803,13 +778,6 @@ function renderSettings() {
           <article class="card">
             <div class="card-header"><div><h2>Поведение сессии</h2><p>Границы и возможности устройства</p></div></div>
             <div class="form-grid">
-              <div class="field full">
-                <label for="extensionLimit">Лимит продлений на сессию</label>
-                <select class="select" id="extensionLimit" data-setting="extension-limit">
-                  ${[0,1,2,3].map((value) => `<option value="${value}" ${state.settings.extensionLimit === value ? "selected" : ""}>${value}</option>`).join("")}
-                </select>
-                <small>Продление всегда требует выбрать 15/30 минут и записать причину.</small>
-              </div>
               <div class="field full">
                 <label for="lateHour">Поздняя сессия начинается с</label>
                 <select class="select" id="lateHour" data-setting="late-hour">
@@ -844,8 +812,8 @@ function renderSettings() {
 
         <div class="stack">
           <article class="card accent-card">
-            <div class="card-header"><div><span class="eyebrow">О приложении · v${APP_VERSION}</span><h2>Шлюз между импульсом и действием</h2></div><a class="button small" href="./CHANGELOG.md" target="_blank" rel="noopener">Ченджлог</a></div>
-            <p class="muted-text">Safe Play не считает игры проблемой и не блокирует их силой. Он добавляет короткую паузу до старта, фиксирует выбранные границы и возвращает факты после.</p>
+            <div class="card-header"><div><span class="eyebrow">О приложении · v${APP_VERSION}</span><h2>Личный игровой дневник</h2></div><a class="button small" href="./CHANGELOG.md" target="_blank" rel="noopener">Ченджлог</a></div>
+            <p class="muted-text">Safe Play — личный игровой дневник: время, впечатления и контекст сессий. Оценки помогают замечать свои ощущения и ни на что не ограничивают доступ.</p>
           </article>
 
           <article class="card">
@@ -878,10 +846,6 @@ function openEntryModal(preselectedGameId = "") {
     return;
   }
 
-  if (isCooldownActive(state.cooldown)) {
-    openReleaseCooldownModal(() => openEntryModal(preselectedGameId));
-    return;
-  }
   const defaultGameId = playableGames.find((game) => game.id === preselectedGameId)?.id || playableGames[0].id;
 
   const checks = [...state.checklist].filter((item) => item.enabled).sort((a, b) => a.order - b.order);
@@ -895,13 +859,13 @@ function openEntryModal(preselectedGameId = "") {
       <form id="entryForm">
         <div class="modal-body">
           <section class="modal-section">
-            <div class="section-heading"><div><h3>1. Базовые вещи</h3><p>Информационный пункт не блокирует старт.</p></div></div>
+            <div class="section-heading"><div><h3>1. Базовые вещи</h3><p>Отметьте то, что хочется сохранить в дневнике.</p></div></div>
             <div class="checklist">
               ${checks.map((item) => `
                 <label class="check-row">
                   <input type="checkbox" name="check-${escapeAttr(item.id)}" data-check-id="${escapeAttr(item.id)}" data-required="${item.required}">
-                  <span><strong>${escapeHTML(item.title)}</strong><small>${item.required ? "нужно подтвердить или осознанно обойти" : "только для контекста"}</small></span>
-                  <span class="status-pill ${item.required ? "required" : "info"}">${item.required ? "обяз." : "инфо"}</span>
+                  <span><strong>${escapeHTML(item.title)}</strong><small>только для контекста</small></span>
+                  <span class="status-pill info">заметка</span>
                 </label>
               `).join("")}
             </div>
@@ -938,14 +902,14 @@ function openEntryModal(preselectedGameId = "") {
               </div>
               <div class="field full">
                 <label for="afterAction">Что я сделаю после?</label>
-                <input class="input" id="afterAction" name="afterAction" maxlength="120" placeholder="Например: душ, чай, дневник" required>
+                <input class="input" id="afterAction" name="afterAction" maxlength="120" placeholder="Например: душ, чай, дневник">
                 <small>Короткий мост обратно в реальную жизнь.</small>
               </div>
             </div>
           </section>
         </div>
         <div class="modal-footer">
-          <span class="subtle-text" id="entryHint">Подтвердите обязательные пункты.</span>
+          <span class="subtle-text" id="entryHint">Все отметки добровольные.</span>
           <div class="button-row">
             <button class="button ghost" type="button" data-close-modal>Отмена</button>
             <button class="button primary" type="submit">Запустить таймер</button>
@@ -975,7 +939,7 @@ function collectEntryPayload(form) {
   };
 }
 
-function beginSession(payload, override = null) {
+function beginSession(payload) {
   const startedAt = new Date();
   const plannedEndAt = new Date(startedAt.getTime() + payload.plannedMinutes * 60_000);
   state.activeSession = {
@@ -998,11 +962,8 @@ function beginSession(payload, override = null) {
     totalPausedMs: 0,
     pausedAt: null,
     warningForEndAt: null,
-    override
+    override: null
   };
-  if (override) {
-    state.events.push({ id: createId("event"), type: "override", at: startedAt.toISOString(), sessionId: state.activeSession.id, ...override });
-  }
   if (state.settings.warningSound) void prepareWarningAudio();
   saveState();
   closeModal();
@@ -1064,67 +1025,6 @@ function beginDuoSession(form) {
   closeModal();
   navigate("home");
   toast("Дуо-таймер запущен", game.title);
-}
-
-function openOverrideModal(payload) {
-  const missing = payload.missingRequired.map((id) => state.checklist.find((item) => item.id === id)?.title).filter(Boolean);
-  openModal(`
-    <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="overrideTitle">
-      <div class="modal-header"><div><span class="eyebrow text-danger">Осознанный обход</span><h2 id="overrideTitle">Остановитесь ещё на несколько секунд</h2><p>Это не запрет. Просто назовите происходящее.</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
-      <div class="modal-body">
-        <div class="notice warning"><span>!</span><div><strong>Не подтверждено:</strong><br>${missing.map(escapeHTML).join("; ")}</div></div>
-        <div class="field"><label for="overrideReason">Почему всё равно запускаю игру?</label><textarea class="textarea" id="overrideReason" minlength="8" maxlength="240" placeholder="Напишите честную причину — минимум несколько слов"></textarea><small>Причина сохранится отдельным событием override.</small></div>
-        <button class="button danger hold-button" id="holdOverride" disabled>Удерживать 3 секунды</button>
-        <p class="subtle-text" style="margin:0;text-align:center">Отпустите раньше — отсчёт сбросится.</p>
-      </div>
-      <div class="modal-footer"><button class="button ghost" data-action="back-to-entry">Вернуться и проверить</button></div>
-    </div>
-  `);
-  const reason = document.querySelector("#overrideReason");
-  const hold = document.querySelector("#holdOverride");
-  reason.addEventListener("input", () => { hold.disabled = reason.value.trim().length < 8; });
-  setupHoldButton(hold, () => {
-    beginSession(payload, {
-      reason: reason.value.trim(),
-      missingChecklistIds: payload.missingRequired
-    });
-  });
-}
-
-function setupHoldButton(button, onComplete) {
-  let started = 0;
-  let frame = null;
-  const duration = 3000;
-  const reset = () => {
-    if (frame) cancelAnimationFrame(frame);
-    frame = null;
-    started = 0;
-    button.style.setProperty("--hold-progress", "0%");
-    button.textContent = "Удерживать 3 секунды";
-  };
-  const step = (time) => {
-    if (!started) started = time;
-    const progress = clamp((time - started) / duration, 0, 1);
-    button.style.setProperty("--hold-progress", `${progress * 100}%`);
-    button.textContent = progress < 1 ? `Удерживайте… ${Math.ceil((duration - progress * duration) / 1000)} с` : "Подтверждено";
-    if (progress >= 1) {
-      frame = null;
-      onComplete();
-    } else {
-      frame = requestAnimationFrame(step);
-    }
-  };
-  button.addEventListener("pointerdown", (event) => {
-    if (button.disabled) return;
-    event.preventDefault();
-    button.setPointerCapture?.(event.pointerId);
-    frame = requestAnimationFrame(step);
-  });
-  ["pointerup", "pointercancel", "pointerleave"].forEach((eventName) => button.addEventListener(eventName, reset));
-  button.addEventListener("keydown", (event) => {
-    if ((event.key === " " || event.key === "Enter") && !frame && !button.disabled) frame = requestAnimationFrame(step);
-  });
-  button.addEventListener("keyup", reset);
 }
 
 function activeGameId(session = state.activeSession) {
@@ -1355,26 +1255,14 @@ function finishSession(form) {
   state.sessions.push(session);
   state.activeSession = null;
 
-  const cooldownTriggered = session.compulsivity >= 4 || session.overtimeMinutes >= 30;
-  if (cooldownTriggered) {
-    const until = new Date(Date.now() + 48 * 60 * 60_000).toISOString();
-    state.cooldown = {
-      id: createId("cooldown"),
-      startedAt: endedAt,
-      until,
-      reason: session.compulsivity >= 4 ? "high-compulsivity" : "large-overtime",
-      sourceSessionId: session.id
-    };
-    state.events.push({ id: createId("event"), type: "cooldown-started", at: endedAt, sourceSessionId: session.id, until });
-  }
   saveState();
   closeModal();
   releaseWakeLock();
   render();
-  openSessionSummary(session, cooldownTriggered);
+  openSessionSummary(session);
 }
 
-function openSessionSummary(session, cooldownTriggered) {
+function openSessionSummary(session) {
   const gameLabel = sessionGameLabel(session);
   openModal(`
     <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="summaryTitle">
@@ -1385,7 +1273,6 @@ function openSessionSummary(session, cooldownTriggered) {
           <div class="mini-metric"><strong class="${session.onTime ? "text-success" : "text-danger"}">${session.actualMinutes} мин</strong><span>факт</span></div>
         </div>
         <div class="notice ${session.onTime ? "" : "warning"}"><span>${session.onTime ? "✓" : "◷"}</span><div><strong>${session.onTime ? "Остановились в границах плана" : `Перерасход: ${session.overtimeMinutes} мин`}</strong><br>Это наблюдение, а не оценка.</div></div>
-        ${cooldownTriggered ? `<div class="notice warning"><span>◇</span><div><strong>Включена мягкая пауза на 48 часов</strong><br>Библиотека будет визуально приглушена. Паузу можно снять вручную.</div></div>` : ""}
         <div class="field"><span class="field-label">Время по играм</span>${renderSessionGameBreakdown(session)}</div>
         <div class="session-fact"><div class="fact-icon">→</div><div><strong>${escapeHTML(session.afterAction || "Следующее действие не указано")}</strong><span>${session.afterActionConfirmed ? "подтверждено на выходе" : "не подтверждено"}</span></div></div>
       </div>
@@ -1397,19 +1284,13 @@ function openSessionSummary(session, cooldownTriggered) {
 function openExtensionModal() {
   const session = state.activeSession;
   if (!session) return;
-  const left = state.settings.extensionLimit - session.extensions.length;
-  if (left <= 0) {
-    toast("Лимит исчерпан", "Для этой сессии больше нет запланированных продлений.");
-    return;
-  }
   openModal(`
     <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="extensionTitle">
       <div class="modal-header"><div><span class="eyebrow">Новое решение</span><h2 id="extensionTitle">Продлить сессию</h2><p>Продление будет записано отдельно.</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
       <form id="extensionForm">
         <div class="modal-body">
           <div class="field"><span class="field-label">На сколько?</span><div class="chip-group"><label class="choice-chip"><input type="radio" name="minutes" value="15" checked><span>15 минут</span></label><label class="choice-chip"><input type="radio" name="minutes" value="30"><span>30 минут</span></label></div></div>
-          <div class="field"><label for="extensionReason">Почему продлеваю?</label><textarea class="textarea" id="extensionReason" name="reason" minlength="5" maxlength="240" required placeholder="Например: завершу текущий бой и сохранюсь"></textarea></div>
-          <div class="notice"><span>i</span><div>После продления останется решений: <strong>${left - 1}</strong>.</div></div>
+          <div class="field"><label for="extensionReason">Почему продлеваю?</label><textarea class="textarea" id="extensionReason" name="reason" maxlength="240" placeholder="Например: завершу текущий бой и сохранюсь"></textarea></div>
         </div>
         <div class="modal-footer"><button class="button ghost" type="button" data-close-modal>Не продлевать</button><button class="button primary" type="submit">Зафиксировать продление</button></div>
       </form>
@@ -1421,7 +1302,7 @@ function extendSession(form) {
   const data = new FormData(form);
   const minutes = Number(data.get("minutes"));
   const reason = String(data.get("reason") || "").trim();
-  if (reason.length < 5 || ![15, 30].includes(minutes)) return;
+  if (![15, 30].includes(minutes)) return;
   const at = new Date().toISOString();
   const extension = { id: createId("extension"), at, minutes, reason };
   state.activeSession.extensions.push(extension);
@@ -1621,7 +1502,6 @@ function openCheckModal(item = null) {
       <form id="checkForm" data-id="${escapeAttr(item?.id || "")}">
         <div class="modal-body">
           <div class="field"><label for="checkName">Название</label><textarea class="textarea" id="checkName" name="title" maxlength="180" required>${escapeHTML(item?.title || "")}</textarea></div>
-          <div class="field"><span class="field-label">Статус</span><div class="chip-group"><label class="choice-chip"><input type="radio" name="required" value="true" ${item?.required !== false ? "checked" : ""}><span>Обязательный</span></label><label class="choice-chip"><input type="radio" name="required" value="false" ${item?.required === false ? "checked" : ""}><span>Информационный</span></label></div></div>
           ${item ? `<button class="button danger small" type="button" data-action="delete-check" data-id="${escapeAttr(item.id)}">Удалить пункт</button>` : ""}
         </div>
         <div class="modal-footer"><button class="button ghost" type="button" data-close-modal>Отмена</button><button class="button primary" type="submit">Сохранить</button></div>
@@ -1636,7 +1516,7 @@ function saveCheck(form) {
   const title = String(data.get("title") || "").trim();
   if (!title) return;
   if (id) {
-    state.checklist = state.checklist.map((item) => item.id === id ? { ...item, title, required: data.get("required") === "true" } : item);
+    state.checklist = state.checklist.map((item) => item.id === id ? { ...item, title, required: false } : item);
   } else {
     state.checklist.push({ id: createId("check"), title, required: data.get("required") === "true", enabled: true, order: state.checklist.length });
   }
@@ -1668,40 +1548,6 @@ function moveCheck(id, direction) {
 
 function normalizeChecklistOrder() {
   state.checklist = [...state.checklist].sort((a, b) => a.order - b.order).map((item, order) => ({ ...item, order }));
-}
-
-function openReleaseCooldownModal(afterRelease = null) {
-  if (!isCooldownActive(state.cooldown)) {
-    afterRelease?.();
-    return;
-  }
-  openModal(`
-    <div class="modal narrow" role="dialog" aria-modal="true" aria-labelledby="releaseTitle">
-      <div class="modal-header"><div><span class="eyebrow">Явное действие</span><h2 id="releaseTitle">Снять мягкую паузу?</h2><p>Это разрешено в любой момент и будет сохранено как факт.</p></div><button class="icon-button" data-close-modal>${icon("close")}</button></div>
-      <form id="releaseCooldownForm">
-        <div class="modal-body">
-          <div class="notice warning"><span>◇</span><div>Пауза должна была действовать до <strong>${formatDateTime(state.cooldown.until)}</strong>.</div></div>
-          <div class="field"><label for="releaseReason">Почему снимаю сейчас? <span class="subtle-text">необязательно</span></label><textarea class="textarea" id="releaseReason" name="reason" maxlength="240" placeholder="Коротко назовите изменившиеся обстоятельства"></textarea></div>
-        </div>
-        <div class="modal-footer"><button class="button ghost" type="button" data-close-modal>Оставить паузу</button><button class="button primary" type="submit">Снять и зафиксировать</button></div>
-      </form>
-    </div>
-  `);
-  document.querySelector("#releaseCooldownForm")._afterRelease = afterRelease;
-}
-
-function releaseCooldown(form) {
-  const reason = String(new FormData(form).get("reason") || "").trim();
-  const releasedAt = new Date().toISOString();
-  state.cooldown.releasedAt = releasedAt;
-  state.cooldown.releaseReason = reason;
-  state.events.push({ id: createId("event"), type: "cooldown-released", at: releasedAt, cooldownId: state.cooldown.id, reason });
-  saveState();
-  const callback = form._afterRelease;
-  closeModal();
-  render();
-  toast("Мягкая пауза снята", "Решение сохранено в журнале событий.");
-  callback?.();
 }
 
 function openSessionDetails(id) {
@@ -2452,9 +2298,8 @@ function updateEntryHint() {
   const form = document.querySelector("#entryForm");
   const hint = document.querySelector("#entryHint");
   if (!form || !hint) return;
-  const missing = [...form.querySelectorAll("[data-check-id][data-required='true']")].filter((input) => !input.checked).length;
-  hint.textContent = missing ? `Не подтверждено обязательных пунктов: ${missing}. Доступен осознанный обход.` : "Базовые условия подтверждены.";
-  hint.className = missing ? "subtle-text text-danger" : "subtle-text text-success";
+  hint.textContent = "Все отметки добровольные — можно сразу начать сессию.";
+  hint.className = "subtle-text";
 }
 
 function updatePlanPreview() {
@@ -2716,7 +2561,6 @@ document.addEventListener("click", (event) => {
     "edit-check": () => openCheckModal(state.checklist.find((item) => item.id === id)),
     "delete-check": () => deleteCheck(id),
     "move-check": () => moveCheck(id, target.dataset.direction),
-    "release-cooldown": () => openReleaseCooldownModal(),
     "export-data": exportData,
     "import-data": () => importInput.click(),
     "reset-data": resetData,
@@ -2730,8 +2574,7 @@ document.addEventListener("submit", (event) => {
   const form = event.target;
   if (form.id === "entryForm") {
     const payload = collectEntryPayload(form);
-    if (!payload.afterAction) return;
-    payload.missingRequired.length ? openOverrideModal(payload) : beginSession(payload);
+    beginSession(payload);
   }
   if (form.id === "duoForm") beginDuoSession(form);
   if (form.id === "finishForm") finishSession(form);
@@ -2739,7 +2582,6 @@ document.addEventListener("submit", (event) => {
   if (form.id === "switchGameForm") switchActiveGame(form);
   if (form.id === "gameForm") void saveGame(form);
   if (form.id === "checkForm") saveCheck(form);
-  if (form.id === "releaseCooldownForm") releaseCooldown(form);
   if (form.id === "editSessionForm") updateSession(form);
   if (form.id === "editDuoSessionForm") updateDuoSession(form);
   if (form.id === "textReportForm") downloadDetailedTextReport(form);
@@ -2772,8 +2614,7 @@ document.addEventListener("change", (event) => {
   }
   if (target.id === "plannedMinutes") updatePlanPreview();
   if (target.id === "reportPeriodType") updateTextReportFields();
-  if (target.dataset.setting === "extension-limit") state.settings.extensionLimit = Number(target.value);
-  if (target.dataset.setting === "late-hour") state.settings.lateHour = Number(target.value);
+    if (target.dataset.setting === "late-hour") state.settings.lateHour = Number(target.value);
   if (target.dataset.setting === "keep-awake") state.settings.keepAwake = target.checked;
   if (target.dataset.setting === "warning-sound") {
     state.settings.warningSound = target.checked;
