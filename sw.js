@@ -1,16 +1,16 @@
-const CACHE = "safe-play-v2.4.1";
+const CACHE = "safe-play-v2.5.0";
 const ASSETS = [
   "./",
   "./index.html",
-  "./styles.css?v=2.4.1",
+  "./styles.css?v=2.5.0",
   "./manifest.json",
   "./CHANGELOG.md",
   "./assets/icon.svg",
   "./assets/icon-192.png",
   "./assets/icon-512.png",
-  "./js/core.js?v=2.4.1",
-  "./js/covers.js?v=2.4.1",
-  "./js/app.js?v=2.4.1"
+  "./js/core.js?v=2.5.0",
+  "./js/covers.js?v=2.5.0",
+  "./js/app.js?v=2.5.0"
 ];
 
 self.addEventListener("install", (event) => {
